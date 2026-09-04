@@ -1,6 +1,6 @@
 """Font selection.
 
-The bundled Space Mono has no CJK glyphs, so a label carrying any — which is
+The bundled TikTok Sans covers Latin only, so a label carrying CJK — which is
 what you get for free from a Chinese filename — would render as tofu boxes.
 Labels are therefore matched to a font one by one, falling back to a system
 CJK face only for the labels that actually need it.

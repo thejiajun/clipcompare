@@ -1,4 +1,4 @@
-"""Font selection — the bundled face has no CJK glyphs, so labels get matched
+"""Font selection — the bundled face is Latin-only, so labels get matched
 to a font one by one."""
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from clipcompare.modes.sidebyside import Options, build
 
 from helpers import clip, graph
 
-BUNDLED = Path("/bundled/SpaceMono-Regular.ttf")
+BUNDLED = Path("/bundled/TikTokSans-Medium.ttf")
 SYSTEM_CJK = Path("/system/STHeiti Medium.ttc")
 
 

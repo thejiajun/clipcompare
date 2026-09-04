@@ -19,7 +19,7 @@ from .modes import pip as pip_mode
 from .modes import sidebyside, wipe as wipe_mode
 from .probe import ClipInfo, ProbeError, probe, require_binaries
 
-FONT_NAME = "SpaceMono-Regular.ttf"
+FONT_NAME = "TikTokSans-Medium.ttf"
 MODES = ("side", "wipe", "pip")
 MODE_ALIASES = {"sbs": "side", "render": "side", "pict": "pip"}
 
@@ -70,7 +70,7 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     names.add_argument("-A", "--label-a", metavar="TEXT", help="label for the first clip")
     names.add_argument("-B", "--label-b", metavar="TEXT", help="label for the second clip")
     names.add_argument("--no-labels", action="store_true", help="draw no labels")
-    names.add_argument("--font", type=Path, help="label font (default: bundled Space Mono)")
+    names.add_argument("--font", type=Path, help="label font (default: bundled TikTok Sans Medium)")
     names.add_argument("--color-a", default="#ffffff", metavar="HEX", help="first label colour")
     names.add_argument("--color-b", default="#cfc3ff", metavar="HEX", help="second label colour")
 
