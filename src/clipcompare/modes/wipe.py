@@ -48,7 +48,10 @@ _PACE_PRESETS = {
     "balanced": (0.30, 0.6, 1.1),
     "late": (0.45, 0.9, 1.8),
 }
-_PACE_PRESETS["snappy"] = _PACE_PRESETS["early"]  # kept for muscle memory
+# `snappy` is not a fourth setting — it is the old name for `early`, kept so
+# existing muscle memory and scripts keep working. It renders byte-identical
+# output, which the CLI help says out loud rather than listing it as a peer.
+_PACE_PRESETS["snappy"] = _PACE_PRESETS["early"]
 DEFAULT_WIPE_DUR = 0.35
 
 # ease-in-out circ, inlined, driven off q = 1-P (see the module docstring).

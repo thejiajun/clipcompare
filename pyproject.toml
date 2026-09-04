@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "clipcompare"
-version = "0.3.0"
+version = "0.4.0"
 description = "Comparison videos from two clips — side-by-side, wipe reveal, picture-in-picture."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,11 +36,11 @@ sbs = "clipcompare.cli:main"
 [dependency-groups]
 dev = ["pytest>=8"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-clipcompare = ["assets/*.ttf"]
+# hatchling packages the directory as-is (fonts included) and keeps no
+# incremental build/ tree — setuptools' one silently re-shipped deleted
+# files, including a whole renamed-away package.
+[tool.hatch.build.targets.wheel]
+packages = ["src/clipcompare"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

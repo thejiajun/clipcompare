@@ -33,6 +33,10 @@ uv tool upgrade clipcompare
 uv tool uninstall clipcompare
 ```
 
+> 这个工具早期叫 `sbs-video`。如果机器上装的是旧名字，先卸载再装新的：
+> `uv tool uninstall sbs-video && uv tool install git+https://github.com/thejiajun/clipcompare`
+> —— `--force` 重装不会清掉旧包目录，会留下上一版的残留。
+
 另外需要 `ffmpeg`，且编译时带 `--enable-libfreetype`（Homebrew 的 `ffmpeg` / `ffmpeg-full` 默认都带，标签靠它画）：
 
 ```bash
@@ -78,7 +82,7 @@ brew install ffmpeg
 | `--layout auto\|lr\|tb` | 默认 auto：竖版/方形左右并排，横版上下堆叠 |
 | `--panel PX` | 每块画面的**短边**，默认 1080 —— 竖版出 2160×1920，横版出 1920×2160 |
 | `--length shortest\|longest` | `longest` 把较短那段的最后一帧冻住补齐 |
-| `--divider PX` | 中缝分隔线粗细，默认 4，`0` 关闭 |
+| `--divider PX` | 中缝分隔线粗细，默认 4，`0` 关闭。线是叠加绘制的，输出尺寸不变，调粗会盖住两侧画面各一半线宽 |
 
 ### wipe
 
@@ -103,7 +107,7 @@ brew install ffmpeg
 | `--inset-scale F` | 小窗占主画面宽度的比例，默认 0.30 |
 | `--margin F` | 小窗离边缘的距离（占宽度比例），默认 0.025 |
 | `--radius PX` | 圆角半径（1080 基准），默认 22 |
-| `--stroke PX` | 白边粗细（1080 基准），默认 3 |
+| `--stroke PX` | 白边粗细（1080 基准），默认 3，`0` 关闭边框 |
 | `--border COLOR` | 边框颜色，默认 white |
 | `--length shortest\|longest` | 同 side |
 | `--panel PX` | 输出短边，默认 0 = 保持主画面原始分辨率 |
@@ -170,13 +174,27 @@ pip    [main] fps → scale ────────────┐
 
 ### pip 的圆角
 
-不用浏览器截图。小窗先用边框色 `pad` 出一圈，再用一张 `geq` 生成的圆角遮罩 `alphamerge`，一次把边框和画面一起切圆角。遮罩用的是**到圆角圆心的距离场**而不是硬阈值：
+不用浏览器截图，用 `geq` 生成两张遮罩：
+
+```
+小窗画面  → 半径 R 切圆角
+边框底板  → 半径 R+stroke 切圆角，填边框色
+画面盖在底板上，四边各内缩 stroke
+```
+
+露出来的那圈底板就是边框，沿弧线宽度均匀。
+
+**为什么要两张而不是一张**：曾经的做法是先给画面 `pad` 一圈边框色再整体切一次圆角 —— 那是错的。越靠近角落，遮罩往里切的深度约 `0.29×(R+stroke)`，远大于边框厚度 `stroke`，于是边框在四条弧线上被整段切掉，露出画面自己的直角。圆角越大豁口越明显。
+
+两张遮罩都用**到圆角圆心的距离场**而不是硬阈值：
 
 ```
 alpha = clip(255 * (r - distance + 0.5), 0, 255)
 ```
 
 所以边缘有一像素的过渡，圆角是抗锯齿的。
+
+遮罩靠 `-loop 1` 喂进来，是**无限流**，所以每个碰到遮罩的 `alphamerge` 都必须写 `shortest=1` —— 否则小窗流会继承这个无限长度，最终的 `overlay` 失去结束条件，`--length longest` 会一直渲染下去不停。
 
 ## 开发
 
@@ -192,6 +210,8 @@ uv run pytest
 ```bash
 uv tool install --force .
 ```
+
+构建后端用 hatchling 而不是 setuptools，这是踩过坑换的：setuptools 的 `build/lib/` 是增量的，源码里删掉的文件不会从那里消失，会被重新打进 wheel —— 包改名之后，旧包目录和旧字体就这么一路跟着装进了新环境，而且 `--force` 重装还会复用缓存的 wheel，让人以为改动没生效。
 
 每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试，79 个测试跑完不到 0.1 秒。
 

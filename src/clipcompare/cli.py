@@ -150,8 +150,9 @@ def _parser() -> argparse.ArgumentParser:
         help="sweep direction, default lr (left to right)",
     )
     group.add_argument(
-        "--pace", choices=wipe_mode.PACES, default="early",
-        help="where the sweep fires, as a fraction of the clip, default early",
+        "--pace", choices=wipe_mode.PACES, default="early", metavar="PACE",
+        help="where the sweep fires: early (default), balanced, late "
+             "(snappy is accepted as an alias of early)",
     )
     group.add_argument(
         "--wipe-start", metavar="SEC|N%%",
@@ -342,9 +343,12 @@ def main(argv: list[str] | None = None) -> int:
     known = set(MODES) | set(MODE_ALIASES)
     if argv and argv[0] not in known and not argv[0].startswith("-"):
         if Path(argv[0]).is_file():
-            hint = shlex.join(["clipcompare", "side", *argv])
+            # Echo back whichever name was actually typed (clipcompare or sbs),
+            # so the suggested line can be pasted as-is.
+            invoked = Path(sys.argv[0]).name or "clipcompare"
+            hint = shlex.join([invoked, "side", *argv])
             print(
-                f"clipcompare: pick a mode ({', '.join(MODES)}). Did you mean:\n  {hint}",
+                f"{invoked}: pick a mode ({', '.join(MODES)}). Did you mean:\n  {hint}",
                 file=sys.stderr,
             )
             return 2

@@ -138,3 +138,11 @@ def test_trim_to_caps_the_output():
 
 def test_no_trim_flag_without_trim_to():
     assert "-t" not in build(clip(), clip(), opts()).command
+
+
+def test_snappy_renders_identically_to_early_because_it_is_an_alias():
+    # Listed in --pace for muscle memory only; it must not drift into being a
+    # fourth setting that silently differs from early.
+    early = build(clip(duration=5.0), clip(duration=5.0), opts(pace="early")).command
+    snappy = build(clip(duration=5.0), clip(duration=5.0), opts(pace="snappy")).command
+    assert early == snappy
