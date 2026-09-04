@@ -30,7 +30,7 @@ class Options:
     length: str = "shortest"
     audio: str = "b"
     divider: int = 4                        # 1080-normalised px, 0 disables
-    font: Path | None = None
+    fonts: tuple[Path, Path] | None = None  # one per label; see fonts.resolve
     color_a: str = "#ffffff"
     color_b: str = "#cfc3ff"
     label_bg: str = "black@0.55"
@@ -119,7 +119,7 @@ def _label_filters(
     panel: int,
     panel_h: int,
     label_dir: Path,
-    font: Path,
+    fonts: tuple[Path, Path],
 ) -> str:
     inset = max(round(panel * 44 / 1000), 8)
     size = max(round(panel * 37 / 1000), 10)
@@ -135,11 +135,13 @@ def _label_filters(
 
     # textfile= sidesteps filtergraph quoting entirely; expansion=none keeps a
     # filename-derived label containing %{...} literal.
-    common = (
-        f"fontfile={_escape(str(font))}:fontsize={size}:expansion=none:"
-        f"box=1:boxcolor={opts.label_bg}:"
-        f"boxborderw={pad_v}|{pad_h}|{pad_v}|{pad_h}"
-    )
+    def common(font: Path) -> str:
+        return (
+            f"fontfile={_escape(str(font))}:fontsize={size}:expansion=none:"
+            f"box=1:boxcolor={opts.label_bg}:"
+            f"boxborderw={pad_v}|{pad_h}|{pad_v}|{pad_h}"
+        )
+
     x_a, y_a = inset + pad_h, inset + pad_v
     if layout == "lr":
         x_b, y_b = f"w-tw-{inset + pad_h}", y_a
@@ -147,9 +149,9 @@ def _label_filters(
         x_b, y_b = x_a, panel_h + inset + pad_v
 
     return (
-        f"drawtext=textfile={_escape(str(file_a))}:{common}:"
+        f"drawtext=textfile={_escape(str(file_a))}:{common(fonts[0])}:"
         f"fontcolor={opts.color_a}:x={x_a}:y={y_a},"
-        f"drawtext=textfile={_escape(str(file_b))}:{common}:"
+        f"drawtext=textfile={_escape(str(file_b))}:{common(fonts[1])}:"
         f"fontcolor={opts.color_b}:x={x_b}:y={y_b}"
     )
 
@@ -210,10 +212,10 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         last = "dv"
 
     if opts.labels and label_dir is not None:
-        font = opts.font
-        assert font is not None
+        fonts = opts.fonts
+        assert fonts is not None
         steps.append(
-            f"[{last}]{_label_filters(opts, layout, opts.panel, panel_h, label_dir, font)}[lv]"
+            f"[{last}]{_label_filters(opts, layout, opts.panel, panel_h, label_dir, fonts)}[lv]"
         )
         last = "lv"
 

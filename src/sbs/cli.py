@@ -14,6 +14,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import __version__
+from . import fonts
 from .probe import ClipInfo, ProbeError, probe, require_binaries
 from .render import AUDIO_CHOICES, FITS, LAYOUTS, LENGTHS, Options, build
 
@@ -142,23 +143,36 @@ def _run_render(args: argparse.Namespace) -> int:
     out = args.out or _default_out(args.clip_a, args.clip_b)
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    labels = _labels(args, args.clip_a, args.clip_b)
+
     with contextlib.ExitStack() as stack:
-        font = args.font
-        if font is None:
-            font = _bundled_font(stack)
-        elif not font.is_file():
-            raise SystemExit(f"sbs: font not found: {font}")
+        if args.font is not None:
+            if not args.font.is_file():
+                raise SystemExit(f"sbs: font not found: {args.font}")
+            label_fonts = (args.font, args.font)
+        elif labels is None:
+            label_fonts = None
+        else:
+            # The bundled font has no CJK glyphs — a Chinese label (which a
+            # Chinese filename gives you by default) needs a system face.
+            label_fonts, unserved = fonts.resolve(labels, _bundled_font(stack))
+            if unserved:
+                print(
+                    "sbs: no CJK font found — non-Latin labels will render as boxes; "
+                    "pass --font /path/to/font.ttf",
+                    file=sys.stderr,
+                )
 
         opts = Options(
             out=out,
-            labels=_labels(args, args.clip_a, args.clip_b),
+            labels=labels,
             layout=args.layout,
             panel=args.panel,
             fit=args.fit,
             length=args.length,
             audio=args.audio,
             divider=args.divider,
-            font=font,
+            fonts=label_fonts,
             color_a=args.color_a,
             color_b=args.color_b,
             fps=args.fps,

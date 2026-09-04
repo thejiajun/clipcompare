@@ -146,7 +146,7 @@ def test_no_labels_leaves_drawtext_out(tmp_path):
 def test_labels_are_written_to_files_and_never_inlined(tmp_path):
     plan = build(
         clip(), clip(),
-        opts(labels=("ORIGINAL", "EDITED"), font=Path("/fonts/Mono.ttf")),
+        opts(labels=("ORIGINAL", "EDITED"), fonts=(Path("/fonts/Mono.ttf"), Path("/fonts/Mono.ttf"))),
         tmp_path,
     )
     body = graph(plan.command)
@@ -160,20 +160,20 @@ def test_labels_are_written_to_files_and_never_inlined(tmp_path):
 def test_label_text_with_ffmpeg_expansion_syntax_stays_literal(tmp_path):
     build(
         clip(), clip(),
-        opts(labels=("WEIRD %{n} NAME", "B"), font=Path("/fonts/Mono.ttf")),
+        opts(labels=("WEIRD %{n} NAME", "B"), fonts=(Path("/fonts/Mono.ttf"), Path("/fonts/Mono.ttf"))),
         tmp_path,
     )
     assert (tmp_path / "a.txt").read_text() == "WEIRD %{n} NAME"
 
 
 def test_second_label_is_right_aligned_side_by_side_and_left_aligned_stacked(tmp_path):
-    font = Path("/fonts/Mono.ttf")
-    lr = graph(build(clip(), clip(), opts(labels=("A", "B"), font=font), tmp_path).command)
+    font = (Path("/fonts/Mono.ttf"), Path("/fonts/Mono.ttf"))
+    lr = graph(build(clip(), clip(), opts(labels=("A", "B"), fonts=font), tmp_path).command)
     assert "x=w-tw-" in lr
     tb = graph(
         build(
             clip(1920, 1080), clip(1920, 1080),
-            opts(labels=("A", "B"), font=font), tmp_path,
+            opts(labels=("A", "B"), fonts=font), tmp_path,
         ).command
     )
     assert "x=w-tw-" not in tb
@@ -183,7 +183,7 @@ def test_second_label_is_right_aligned_side_by_side_and_left_aligned_stacked(tmp
 def test_font_path_with_filtergraph_metacharacters_is_escaped(tmp_path):
     plan = build(
         clip(), clip(),
-        opts(labels=("A", "B"), font=Path("/od d:fonts/Mono.ttf")),
+        opts(labels=("A", "B"), fonts=(Path("/od d:fonts/Mono.ttf"),) * 2),
         tmp_path,
     )
     assert "/od d\\:fonts/Mono.ttf" in graph(plan.command)

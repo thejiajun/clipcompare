@@ -58,7 +58,7 @@ sbs render <clip-a> <clip-b> [options]
 | `--length shortest\|longest` | `longest` 会把较短那段的最后一帧冻住补齐 |
 | `--audio a\|b\|both\|none` | `both` 会混音；某一段没音轨时自动退回有音轨的那段 |
 | `--divider PX` | 中缝分隔线粗细，默认 4，`0` 关闭 |
-| `--font PATH` | 标签字体，默认用自带的 Space Mono Regular |
+| `--font PATH` | 标签字体。默认拉丁字符用自带的 Space Mono，中文自动换系统黑体 |
 | `--color-a / --color-b HEX` | 两个标签的颜色，默认白色 + 淡紫 `#cfc3ff` |
 | `--fps N` | 强制输出帧率 |
 | `--crf N` / `--preset NAME` | x264 画质档位，默认 `18` / `medium` |
@@ -100,6 +100,7 @@ sbs render a.mp4 b.mp4 --dry-run
 - **标签走 `textfile=`**，不走 `text=`。filtergraph 里的引号、冒号、反斜杠转义是个坑，读文件可以完全绕开；再配上 `expansion=none`，文件名里带 `%{n}` 这种也会原样显示。
 - **帧率必须先对齐**。`hstack` / `vstack` 要求两路同步，24fps 和 30fps 直接拼会错位，所以两路都先过一遍 `fps=`，并且保留精确有理数（29.97 是 `30000/1001`，不是 `29.97`）。
 - **旋转元数据要单独读**。手机竖拍的素材容器里存的是 1920×1080 + rotation，ffmpeg 解码时会自动转正，但判断布局用的宽高得自己换过来。
+- **中文标签会自动换字体**。自带的 Space Mono 没有中文字形，而标签默认取自文件名 —— 中文文件名走默认路径就会渲染成豆腐块。所以带中文的标签会自动找系统黑体（`STHeiti Medium.ttc` 等），两个标签各自判断，中英混排也正常。用 fontconfig 按字族名找（`font=PingFang SC`）反而会解析到渲染不出中文的 face，所以这里只按文件路径找。
 
 `render.build()` 是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试。
 
@@ -123,6 +124,7 @@ uv tool install --force .
 - 只做 side-by-side。wipe 揭示、画中画不在这里。
 - 标签是直角药丸、没有字间距 —— ffmpeg 的 `drawtext` 画不了圆角和 letter-spacing。要圆角药丸得换成离屏渲染 PNG 再叠，那会引入浏览器依赖，不值。
 - 两段素材必须自己对齐好时间点。工具不做内容对位，只做画面拼接。
+- 中文字体回退目前只覆盖 macOS 自带黑体和常见的 Linux Noto CJK 路径。都找不到时会提示你用 `--font` 指定。
 
 ## License
 
