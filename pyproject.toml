@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sbs-video"
+version = "0.1.0"
+description = "Side-by-side comparison videos from two clips, powered by ffmpeg."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Jiajun Chen" }]
+keywords = ["ffmpeg", "video", "comparison", "side-by-side", "before-after", "cli"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Video",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/thejiajun/sbs-video"
+Repository = "https://github.com/thejiajun/sbs-video"
+Issues = "https://github.com/thejiajun/sbs-video/issues"
+
+[project.scripts]
+sbs = "sbs.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sbs = ["assets/*.ttf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
