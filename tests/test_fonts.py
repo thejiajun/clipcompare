@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from sbs import fonts
-from sbs.render import Options, build
+from clipcompare import fonts
+from clipcompare.modes.sidebyside import Options, build
 
-from test_render import clip, graph
+from helpers import clip, graph
 
 BUNDLED = Path("/bundled/SpaceMono-Regular.ttf")
 SYSTEM_CJK = Path("/system/STHeiti Medium.ttc")

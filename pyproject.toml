@@ -3,14 +3,14 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sbs-video"
-version = "0.1.1"
-description = "Side-by-side comparison videos from two clips, powered by ffmpeg."
+name = "clipcompare"
+version = "0.2.0"
+description = "Comparison videos from two clips — side-by-side, wipe reveal, picture-in-picture."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Jiajun Chen" }]
-keywords = ["ffmpeg", "video", "comparison", "side-by-side", "before-after", "cli"]
+keywords = ["ffmpeg", "video", "comparison", "side-by-side", "wipe", "picture-in-picture", "before-after", "cli"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
@@ -25,12 +25,13 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/thejiajun/sbs-video"
-Repository = "https://github.com/thejiajun/sbs-video"
-Issues = "https://github.com/thejiajun/sbs-video/issues"
+Homepage = "https://github.com/thejiajun/clipcompare"
+Repository = "https://github.com/thejiajun/clipcompare"
+Issues = "https://github.com/thejiajun/clipcompare/issues"
 
 [project.scripts]
-sbs = "sbs.cli:main"
+clipcompare = "clipcompare.cli:main"
+sbs = "clipcompare.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
@@ -39,7 +40,7 @@ dev = ["pytest>=8"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-sbs = ["assets/*.ttf"]
+clipcompare = ["assets/*.ttf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

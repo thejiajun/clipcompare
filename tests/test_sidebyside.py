@@ -6,24 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from sbs.probe import ClipInfo
-from sbs.render import Options, build
+from clipcompare.modes.sidebyside import Options, build, panel_size, resolve_layout
+
+from helpers import clip, graph
 
 
-def clip(width=1080, height=1920, fps="30/1", duration=3.0, audio=False, name="clip.mp4"):
-    return ClipInfo(
-        path=Path(name),
-        width=width,
-        height=height,
-        fps=fps,
-        fps_value=eval(fps),  # noqa: S307 - test-local, always a literal rational
-        duration=duration,
-        has_audio=audio,
-    )
-
-
-def graph(command: list[str]) -> str:
-    return command[command.index("-filter_complex") + 1]
 
 
 def opts(**kwargs) -> Options:
@@ -32,41 +19,42 @@ def opts(**kwargs) -> Options:
 
 def test_portrait_pair_stacks_left_right_at_skill_dimensions():
     plan = build(clip(), clip(), opts())
-    assert plan.layout == "lr"
-    assert (plan.panel_w, plan.panel_h) == (1080, 1920)
+    assert resolve_layout(clip(), "auto") == "lr"
+    assert panel_size(clip(), 1080) == (1080, 1920)
     assert (plan.out_w, plan.out_h) == (2160, 1920)
     assert "hstack=inputs=2:shortest=1" in graph(plan.command)
 
 
 def test_landscape_pair_stacks_top_bottom():
     plan = build(clip(1920, 1080), clip(1920, 1080), opts())
-    assert plan.layout == "tb"
+    assert resolve_layout(clip(1920, 1080), "auto") == "tb"
     assert (plan.out_w, plan.out_h) == (1920, 2160)
     assert "vstack=inputs=2:shortest=1" in graph(plan.command)
 
 
 def test_panel_is_the_short_edge():
     plan = build(clip(720, 1280), clip(720, 1280), opts(panel=2160))
-    assert (plan.panel_w, plan.panel_h) == (2160, 3840)
+    assert panel_size(clip(720, 1280), 2160) == (2160, 3840)
     assert (plan.out_w, plan.out_h) == (4320, 3840)
 
 
 def test_square_clips_go_side_by_side():
     plan = build(clip(1080, 1080), clip(1080, 1080), opts())
-    assert plan.layout == "lr"
+    assert resolve_layout(clip(1080, 1080), "auto") == "lr"
     assert (plan.out_w, plan.out_h) == (2160, 1080)
 
 
 def test_layout_override_wins_over_orientation():
     plan = build(clip(1920, 1080), clip(1920, 1080), opts(layout="lr"))
-    assert plan.layout == "lr"
+    assert "lr" in plan.detail
     assert (plan.out_w, plan.out_h) == (3840, 1080)
 
 
 def test_odd_derived_panel_size_is_rounded_even():
-    plan = build(clip(1001, 1999), clip(1001, 1999), opts(panel=641))
-    assert plan.panel_w % 2 == 0
-    assert plan.panel_h % 2 == 0
+    build(clip(1001, 1999), clip(1001, 1999), opts(panel=641))
+    width, height = panel_size(clip(1001, 1999), 641)
+    assert width % 2 == 0
+    assert height % 2 == 0
 
 
 def test_cover_crops_and_contain_pads():
