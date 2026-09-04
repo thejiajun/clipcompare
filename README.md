@@ -33,10 +33,6 @@ uv tool upgrade clipcompare
 uv tool uninstall clipcompare
 ```
 
-> 这个工具早期叫 `sbs-video`。如果机器上装的是旧名字，先卸载再装新的：
-> `uv tool uninstall sbs-video && uv tool install git+https://github.com/thejiajun/clipcompare`
-> —— `--force` 重装不会清掉旧包目录，会留下上一版的残留。
-
 另外需要 `ffmpeg`，且编译时带 `--enable-libfreetype`（Homebrew 的 `ffmpeg` / `ffmpeg-full` 默认都带，标签靠它画）：
 
 ```bash
@@ -163,9 +159,9 @@ pip    [main] fps → scale ────────────┐
 - **旋转元数据要单独读**。手机竖拍的素材容器里存的是 1920×1080 + rotation，ffmpeg 解码时会自动转正，但判断布局用的宽高得自己换过来。
 - **中文标签会自动换字体**。自带的 TikTok Sans 只有拉丁字形（910 个字符），而标签默认取自文件名 —— 中文文件名走默认路径就会渲染成豆腐块。所以带中文的标签会自动找系统黑体（`STHeiti Medium.ttc` 等），两个标签各自判断。用 fontconfig 按字族名找（`font=PingFang SC`）反而会解析到渲染不出中文的 face，所以只按文件路径找。
 
-### wipe 的两个坑
+### wipe 的两条硬约束
 
-都是实打实调出来的：
+改这部分代码前先看这两条，违反任何一条都会出可见的错误画面：
 
 1. **xfade 的 `P` 是 1→0，不是 0→1**。缓动要挂在 `q = 1-P` 上，否则扫描会反向：先跳到 B、倒着扫回去、再弹回来。
 2. **缓动表达式必须内联，不能用 `st()`/`ld()` 寄存器**。xfade 会把切片分到多个线程上跑，而这些线程共享表达式寄存器数组，st/ld 会竞争，结果是画面上散落白点噪声。把 ease-in-out-circ 重复内联写几遍是无竞争的，而且不慢——表达式只在扫描那几帧上求值。
@@ -184,7 +180,7 @@ pip    [main] fps → scale ────────────┐
 
 露出来的那圈底板就是边框，沿弧线宽度均匀。
 
-**为什么要两张而不是一张**：曾经的做法是先给画面 `pad` 一圈边框色再整体切一次圆角 —— 那是错的。越靠近角落，遮罩往里切的深度约 `0.29×(R+stroke)`，远大于边框厚度 `stroke`，于是边框在四条弧线上被整段切掉，露出画面自己的直角。圆角越大豁口越明显。
+**必须是两张，不能合并成一张**。给画面 `pad` 一圈边框色再整体切一次圆角是行不通的：越靠近角落，遮罩往里切的深度约 `0.29×(R+stroke)`，远大于边框厚度 `stroke`，边框会在四条弧线上被整段切掉，露出画面自己的直角。圆角越大豁口越明显。
 
 两张遮罩都用**到圆角圆心的距离场**而不是硬阈值：
 
@@ -211,7 +207,7 @@ uv run pytest
 uv tool install --force .
 ```
 
-构建后端用 hatchling 而不是 setuptools，这是踩过坑换的：setuptools 的 `build/lib/` 是增量的，源码里删掉的文件不会从那里消失，会被重新打进 wheel —— 包改名之后，旧包目录和旧字体就这么一路跟着装进了新环境，而且 `--force` 重装还会复用缓存的 wheel，让人以为改动没生效。
+构建后端是 hatchling，它不产生增量的 `build/` 目录 —— setuptools 的那个会把源码里已删除的文件继续打进 wheel。改完代码若发现装进去的还是旧的，用 `uv tool install --reinstall .`，`--force` 在版本号不变时会复用缓存的 wheel。
 
 每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试，79 个测试跑完不到 0.1 秒。
 
