@@ -193,3 +193,57 @@ console.log(JSON.stringify([
 """
     out = subprocess.run(["node", "-e", probe], capture_output=True, text=True, check=True).stdout
     assert json.loads(out) == [1.0, 4.0, 3.0]
+
+
+def _helpers(text: str) -> str:
+    return text.split("<script>")[1].split("DATA.groups.forEach")[0]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_frame_steps_land_mid_frame_and_the_loupe_covers_the_same_scene(tmp_path):
+    probe = _helpers(_page(tmp_path)) + """
+console.log(JSON.stringify([
+  stepTime(1.5058, 30, 1, 5.6),            // frame 45 -> 46, at its middle
+  stepTime(0.01, 30, -1, 5.6),             // never before the first frame
+  stepTime(5.59, 30, 1, 5.6),              // never past the last
+  fitRect(400, 400, 720, 1280),
+  loupeRegion(0.5, 0.5, 200, 4, 720, 1280, 720, 1280),
+  loupeRegion(0.5, 0.5, 200, 4, 720, 1280, 1080, 1920),   // a 1080p version: same piece, more pixels
+  loupeRegion(0, 0, 200, 4, 720, 1280, 720, 1280),        // kept inside the frame
+]));
+"""
+    out = json.loads(subprocess.run(["node", "-e", probe], capture_output=True, text=True, check=True).stdout)
+    assert out[0] == pytest.approx(46.5 / 30) and out[1] == pytest.approx(0.5 / 30) and out[2] == pytest.approx(167.5 / 30)
+    assert out[3]["h"] == 400 and out[3]["x"] == pytest.approx(87.5)
+    small, large, corner = out[4], out[5], out[6]
+    assert (small["sw"], small["sx"]) == (50, 335) and large["sw"] == 75 and large["sx"] == pytest.approx(502.5)
+    assert corner["sx"] == 0 and corner["sy"] == 0
+
+
+def test_page_carries_kinds_info_and_shared_fields_for_video_and_images(tmp_path):
+    from clipcompare import info
+    from helpers import clip, image
+
+    run = info.describe(
+        [{"seed": 1}, {"seed": 2}],
+        [{"kind": "video", "width": 720, "height": 1280, "size": 9_000_000, "duration": 5.6,
+          "video_codec": "h264", "pix_fmt": "yuv420p", "audio_codec": None},
+         {"kind": "video", "width": 720, "height": 1280, "size": 3_000_000, "duration": 5.6,
+          "video_codec": "h264", "pix_fmt": "yuv420p", "audio_codec": None}],
+        [None, {"ssim": 0.99}], 0,
+    )
+    clips = [clip(name=str(tmp_path / "a.mp4")), image(name=str(tmp_path / "b.png"))]
+    text = page.build(clips, ("A", "B"), (), ("T",), 0, tmp_path / "p.html", infos=(run,))
+    data = json.loads(text.split("const DATA = ")[1].split(";\n")[0])
+    group = data["groups"][0]
+    assert group["kind"] == "visual" and [v["kind"] for v in group["versions"]] == ["video", "image"]
+    assert [item["text"] for item in group["shared"]] == ["720×1280", "5.60 s", "h264 yuv420p", "no audio"]
+    a, b = group["versions"]
+    assert a["baseline"] and b["info"]["differences"] == 2 and b["info"]["recipe"][0]["accent"]
+    assert (a["src"], b["src"]) == ("a.mp4", "b.png")
+    assert "<script src" not in text and "<link" not in text
+
+
+def test_an_all_audio_group_keeps_the_spoken_prompt_player(tmp_path):
+    data = json.loads(_page(tmp_path).split("const DATA = ")[1].split(";\n")[0])
+    assert data["groups"][0]["kind"] == "audio"

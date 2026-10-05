@@ -37,12 +37,23 @@ SEPARATOR = " · "
 GOOD_BAD = {"ssim": (0.98, 0.90), "psnr": (40.0, 30.0), "snr": (30.0, 15.0)}
 
 
+LABELS = {
+    "model": "Model", "preset": "Preset", "cost": "Cost", "seed": "Seed",
+    "resolution": "Resolution", "bitrate": "Bitrate", "fps": "Frame rate", "duration": "Duration",
+    "video": "Video", "format": "Format", "audio": "Audio", "size": "File size",
+    "ssim": "SSIM", "psnr": "PSNR", "snr": "SNR", "scaled_to": "Compared at", "baseline": "Baseline",
+}
+
+
 @dataclass(frozen=True)
 class Item:
     key: str
-    text: str
+    text: str              # as a tile says it
     accent: bool = False   # recipe: differs from the baseline
     tone: str = ""         # similarity: "good", "bad" or "" (neutral)
+    delta: str = ""        # measured: neutral change against the baseline, "−61%"
+    label: str = ""        # as a table row names it (the web page)
+    value: str = ""        # ...and its value there
 
 
 @dataclass(frozen=True)
@@ -165,18 +176,27 @@ def _similarity(comparison: dict | None) -> list[Item]:
         return []
     out = []
     if "ssim" in comparison:
-        out.append(Item("ssim", f"SSIM {comparison['ssim']:.3f}", tone=tone("ssim", comparison["ssim"])))
-    if "psnr" in comparison:
-        psnr = comparison["psnr"]
-        text = "PSNR identical" if psnr == float("inf") else f"PSNR {psnr:.1f} dB"
-        out.append(Item("psnr", text, tone=tone("psnr", psnr)))
-    if "snr" in comparison:
-        snr = comparison["snr"]
-        text = "SNR identical" if snr == float("inf") else f"SNR {snr:.1f} dB"
-        out.append(Item("snr", text, tone=tone("snr", snr)))
+        value = f"{comparison['ssim']:.3f}"
+        out.append(Item("ssim", f"SSIM {value}", tone=tone("ssim", comparison["ssim"]), label="SSIM", value=value))
+    for key in ("psnr", "snr"):
+        if key in comparison:
+            number = comparison[key]
+            value = "identical" if number == float("inf") else f"{number:.1f} dB"
+            out.append(Item(key, f"{key.upper()} {value}", tone=tone(key, number), label=key.upper(), value=value))
     if comparison.get("scaled_to"):
-        out.append(Item("scaled_to", f"at {comparison['scaled_to'].replace('x', TIMES)}"))
+        size = comparison["scaled_to"].replace("x", TIMES)
+        out.append(Item("scaled_to", f"at {size}", label=LABELS["scaled_to"], value=size))
     return out
+
+
+def _row(key: str, text: str) -> tuple[str, str]:
+    """(label, value) for a table row: params keys name themselves."""
+    if key.startswith("params."):
+        name = key.split(".", 1)[1]
+        return name, text[len(name) + 1:]
+    if key == "seed":
+        return "Seed", text.removeprefix("seed ")
+    return LABELS.get(key, key), text
 
 
 # --- the run --------------------------------------------------------------
@@ -203,10 +223,10 @@ def describe(
     shared: list[Item] = []
     for key, text, _ in (recipe_rows[0] if recipe_rows else []):
         if key in recipe_shared:
-            shared.append(Item(key, text))
+            shared.append(Item(key, text, label=_row(key, text)[0], value=_row(key, text)[1]))
     for key, text, _ in (measured_rows[0] if measured_rows else []):
         if key in measured_shared:
-            shared.append(Item(key, text))
+            shared.append(Item(key, text, label=_row(key, text)[0], value=text))
 
     base_recipe = {key: value for key, _, value in recipe_rows[baseline]} if baseline is not None else {}
     base_measured = {key: (text, number) for key, text, number in measured_rows[baseline]} if baseline is not None else {}
@@ -215,7 +235,10 @@ def describe(
         is_base = baseline == index
         compared = baseline is not None and not is_base
         recipe_items = tuple(
-            Item(key, text, accent=compared and (key not in base_recipe or base_recipe[key] != value))
+            Item(
+                key, text, accent=compared and (key not in base_recipe or base_recipe[key] != value),
+                label=_row(key, text)[0], value=_row(key, text)[1],
+            )
             for key, text, value in recipe_rows[index] if key not in recipe_shared
         )
         measured_items = []
@@ -224,12 +247,15 @@ def describe(
             if key in measured_shared:
                 continue
             base = base_measured.get(key)
+            change = ""
             if compared and base and base[0] != text:
                 changed += 1
                 if number is not None and base[1]:
-                    text = f"{text} {delta(number, base[1])}"
-            measured_items.append(Item(key, text))
-        similarity: list[Item] = [Item("baseline", "baseline")] if is_base and any(measures) else []
+                    change = delta(number, base[1])
+            measured_items.append(Item(key, text, delta=change, label=LABELS.get(key, key), value=text))
+        similarity: list[Item] = (
+            [Item("baseline", "baseline", label="Baseline", value="this clip")] if is_base and any(measures) else []
+        )
         if compared:
             similarity += _similarity(comparisons[index])
         missing = {key for key in base_recipe if key not in {k for k, _, _ in recipe_rows[index]}}
@@ -289,7 +315,8 @@ def measured_lines(tile: Tile) -> list[list[Span]]:
         for item in items:
             if spans:
                 spans.append(Span(SEPARATOR, DS_TEXT_SECONDARY_DARK))
-            spans.append(Span(item.text, TONES.get(item.tone, DS_TEXT_SECONDARY_DARK), tabular=True))
+            text = f"{item.text} {item.delta}" if item.delta else item.text
+            spans.append(Span(text, TONES.get(item.tone, DS_TEXT_SECONDARY_DARK), tabular=True))
         if spans:
             lines.append(spans)
     return lines

@@ -153,11 +153,10 @@ def test_wipe_and_pip_refuse_images(mode):
         cli._check_images(mode, _args(), [image(), clip()], None)
 
 
-def test_group_and_html_refuse_all_images():
+def test_group_refuses_all_images_and_html_takes_them():
     with pytest.raises(SystemExit, match="--group"):
         cli._check_images("grid", _args(group=2), images(4), None)
-    with pytest.raises(SystemExit, match="--html"):
-        cli._check_images("grid", _args(html=Path("x.html")), images(2), None)
+    assert cli._check_images("grid", _args(html=Path("x.html")), images(2), None) is True
 
 
 def test_images_end_to_end(tmp_path):

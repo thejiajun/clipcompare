@@ -35,7 +35,9 @@ def test_shared_fields_go_to_the_title_bar_and_differences_to_the_tiles():
     base, other = run.tiles
     assert [item.text for item in other.recipe] == ["fit crf"] and other.recipe[0].accent
     assert not base.recipe[0].accent
-    assert [item.text for item in other.measured] == ["5.1 Mbps −61%", "3.6 MB −60%"]
+    assert [(item.text, item.delta) for item in other.measured] == [("5.1 Mbps", "−61%"), ("3.6 MB", "−60%")]
+    assert [span.text for span in info.measured_lines(other)[0]] == ["5.1 Mbps −61%", " · ", "3.6 MB −60%"]
+    assert (other.recipe[0].label, other.recipe[0].value) == ("fit", "crf")
     assert [item.text for item in base.similarity] == ["baseline"]
     assert [(item.text, item.tone) for item in other.similarity] == [("SSIM 0.987", "good"), ("PSNR 45.4 dB", "good")]
     assert other.differences == 3 and base.differences == 0
@@ -50,7 +52,7 @@ def test_params_are_diffed_key_by_key_whatever_the_keys():
 def test_without_a_baseline_nothing_is_marked_or_compared():
     run = info.describe([{"seed": 1}, {"seed": 2}], [measured(), measured(bitrate=1)], [None, None], baseline=None)
     assert all(not item.accent for tile in run.tiles for item in tile.recipe)
-    assert "−" not in run.tiles[1].measured[0].text   # no delta without a baseline
+    assert run.tiles[1].measured[0].delta == ""   # no delta without a baseline
     assert run.tiles[0].differences is None
 
 

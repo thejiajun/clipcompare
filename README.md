@@ -46,7 +46,7 @@ clipcompare grid kali-v3.mp3 kali-v4.mp3 alia-v3.mp3 alia-v4.mp3 ... \
 - 颜色按全彩 RGB 输出，不像视频那样降到 yuv420p，细节对比不失真。
 - 提示词（`--captions` 或 manifest 的 `prompt`）显示为格子里的静态文字：整段一次显示，底色只盖住文字那几行。
 - 图片和视频 / 音频混在一起时，图片在整段视频时长内保持不动；`--sequential` 时它也有自己的一轮。
-- `--sequential`、`--pause`、`--head`、`--audio` 对纯图片不起作用；`--group`、`--html`、`wipe`、`pip` 不支持图片，会直接报错说明。
+- `--sequential`、`--pause`、`--head`、`--audio` 对纯图片不起作用；`--group`、`wipe`、`pip` 不支持图片，会直接报错说明。`--html` 可以，见「网页」。
 
 ```bash
 # 三张截图拼一行，顶部写标题
@@ -117,13 +117,22 @@ clipcompare grid --manifest megan-project/clips.json --html megan-project/compar
 
 画法：ffmpeg 的 `drawtext` 一次只能画一种颜色、也不能画下划线，所以排版在 Python 里做——直接从字体文件读字宽（`metrics.py`，不依赖 Pillow），按样式切成一段段，每段一个 drawtext 画在算好的 x 上，下划线是量好宽度的 drawbox。每个（片段，段落）先渲成一张 PNG，正片只在对应时间段叠上去。
 
-**网页（`--html OUT.html`）**：一个自包含的 HTML，CSS / JS 内联、不连 CDN，`file://` 离线可用；字体用本机的 Telka，没有就退回系统无衬线。每组一个播放器：
+**网页（`--html OUT.html`）**：视频、图片、音频都能出，是最主要的看片入口。网页**直接播放原始文件**，从不重新编码：本地文件按相对网页的路径引用、不复制；URL 原样引用，加 `--copy-media` 会下载到网页旁边的 `media/`，整个文件夹拷走也能离线看。一个自包含的 HTML，CSS / JS 内联、不连 CDN，`file://` 直接打开就能用；字体用本机的 Telka，没有就退回系统无衬线；手机宽度下不会横向滚动。
+
+视频和图片的那组：
+
+- **同步播放**：所有版本一起走。点版本或按 `1`–`9` 把它放到大画面，**停在同一帧**（时长不同就按段落或时长比例对齐，跟音频一样）；空格播放 / 暂停，`,` `.` 逐帧前后退；播到头自动从头再来。
+- **擦除对比（Wipe）**：选 A、B 两个版本，拖中间的竖线左右看。是浏览器里两个同步的 `<video>` / `<img>` 叠在一起用 CSS `clip-path` 切开，不渲染擦除视频。按 `W` 开关。
+- **同步放大镜（Loupe）**：选 2× 或 4×（按 `Z` 循环切换），鼠标在大画面或任意缩略图上移动 / 拖动，下面并排显示**所有版本的同一块区域**；4× 时像素不做平滑，压缩方块能直接看出来。分辨率不同的版本显示的是同一块画面（高分辨率那版里像素更多）。暂停的帧和图片都能用。
+- **信息**：每组标题下一行是所有版本共有的信息；每个版本的缩略图上有 `+N differences` 小标（跟 baseline 不同的字段数，baseline 那版写 `baseline`），下面一张信息卡：Recipe（不同的标紫）、Measured（小表格，带相对 baseline 的百分比，SSIM / PSNR / SNR 带好坏色）、Prompt（可折叠，差异标记跟视频里一样）。
+
+纯音频的那组照旧是一个播放器：
 
 - 点版本按钮或按 `1`–`9` 切换，**停在剧本里的同一位置**：两边都有段落时间时按「第几段、段内百分比」换算，否则按时长比例换算；空格播放 / 暂停。
 - 提示词带同样的差异标记，正在说的那段高亮并滚到顶部。
-- 每个版本标出时长和 WPM（去掉 tag 后的词数 ÷ 时长）。
-- 本地音频按相对网页的路径引用、不复制；URL 原样引用，加 `--copy-media` 会下载到网页旁边的 `media/`，整个文件夹拷走也能离线听。
-- 单写 `--html` 只出网页；有 `-o` 或 manifest 里有 `out` 时视频和网页一起出。
+- 每个版本标出时长和 WPM（去掉 tag 后的词数 ÷ 时长），有 recipe / `--stats` 时按钮里也有信息卡。
+
+单写 `--html` 只出网页；有 `-o` 或 manifest 里有 `out` 时视频和网页一起出。
 
 不用 manifest 也能加提示词：`--captions prompts.json`（字符串数组，每段一个，`null` 表示没有）；没有 baseline 时所有 tag 都标紫、没有差异摘要。
 
@@ -283,7 +292,7 @@ brew install ffmpeg
 | `--baseline N` | 第 N 段是 baseline（配合 `--group` 时是每组第 N 段）；manifest 用 `"baseline": true` |
 | `--header "NAME: VALUE"` | 拉取 URL manifest 时带的 HTTP 头，可重复 |
 | `--captions FILE` | 每段一条提示词（JSON 字符串数组），播放时显示在格子里 |
-| `--html OUT.html` | 另出一个可切换版本的网页 |
+| `--html OUT.html` | 另出一个播放原始文件的对比网页：同步播放、同帧切换、逐帧、擦除、放大镜、信息卡 |
 | `--copy-media` | 配合 `--html`：把 URL 片段下载到网页旁边，离线可用 |
 | `--group N` | 每 N 段一组（如 `2` 就是一对一对比），每组单独成一张网格、按顺序接起来播。片段数必须能被 N 整除；`-l` 可以只写 N 个标签，每组共用 |
 | `--audio auto\|none\|mix\|N` | 默认 `auto`：轮流播放时跟着正在播的那格，同时播放时用第一段有声音的；`mix` 全部混音；数字 = 只用第 N 段的声音 |

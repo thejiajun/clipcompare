@@ -99,8 +99,6 @@ def _check_images(mode: str, args: argparse.Namespace, clips: list[ClipInfo], ou
     """Whether the result is a still picture (every clip an image), after
     checking the output extension and mode can make what was asked for."""
     images = [clip for clip in clips if clip.is_image]
-    if images and getattr(args, "html", None) is not None:
-        raise SystemExit("clipcompare: --html plays videos and audio; images are not supported there")
     if images and mode in ("wipe", "pip"):
         raise SystemExit(f"clipcompare: {mode} needs two videos; use side or grid for images")
     still = len(images) == len(clips)
@@ -191,8 +189,9 @@ def _add_grid_parser(subparsers) -> None:
     )
     grid.add_argument(
         "--html", type=Path, metavar="OUT.html",
-        help="also (or, without -o and a manifest \"out\", only) write a self-contained web page: "
-             "one player per group that switches versions at the same point in the script",
+        help="also (or, without -o and a manifest \"out\", only) write a self-contained web page that "
+             "plays the original files in sync: switch versions on the same frame, step frames, wipe "
+             "between any two, a synced loupe, and each version's recipe / measured / prompt",
     )
     grid.add_argument(
         "--stats", action="store_true",
@@ -613,7 +612,7 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             labels = _labels(args, names) or tuple(_label_from_path(path) for path in names)
             page.write(args.html, page.build(
                 clips, labels, args._prompts, _titles(args, len(paths)), args.group, args.html,
-                sources=_page_sources(sources, paths, args.html, args.copy_media),
+                sources=_page_sources(sources, paths, args.html, args.copy_media), infos=args._infos,
             ))
             print(f"[grid] page: {args.html}")
             if args.out is None:
