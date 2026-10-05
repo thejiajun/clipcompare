@@ -14,6 +14,8 @@ DS_ACCENT_700 = "0xcfc3ff"         # --ds-accent-700 = --ds-brand / --ds-lilac: 
 DS_TEXT_SECONDARY_DARK = "0xfcfaf7@0.7"  # dark --ds-text-secondary, #fcfaf7b3: diff summary, notes
 DS_INVERT_600_DARK = "0x222222@0.6"   # dark --ds-invert-600, rgb(34 34 34 / 60%): label chip
 DS_PRIMARY_300_DARK = "0xfcfaf7@0.1"  # dark --ds-primary-300, rgb(252 250 247 / 10%): centre line
+DS_NEON_GREEN = "0x15cb74"         # --ds-neon-green: a similarity close to the baseline
+DS_ALERT = "0xde0000"              # --ds-alert (= --ds-destructive): a similarity far from it
 
 # --ds-font-sans is "Telka" (labels), --ds-font-display "Telka Extended"
 # (titles), both at the Medium weight. Telka is a licensed commercial face

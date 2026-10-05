@@ -6,10 +6,14 @@ titles and the output named in one JSON file instead of on the command line.
       "out": "compare.mp4",                # optional, written next to the manifest
       "group": 4,                          # optional: default clips / titles
       "sequential": true,                  # optional, default true
+      "stats": true,                       # optional: measure every clip (like --stats)
       "clips": [
         {"file": "kali-v3.mp3", "label": "v3", "prompt": "[warm] Okay so...",
          "baseline": true,                 # the reference the others are diffed against
-         "segments": [{"text": "...", "start": 0.0, "end": 9.5, "estimated": true}]},
+         "segments": [{"text": "...", "start": 0.0, "end": 9.5, "estimated": true}],
+         # optional recipe: what this clip was meant to be (see info.py)
+         "model": "eleven-v3", "preset": "warm", "params": {"stability": 0.5},
+         "cost": 0.12, "seed": 7},
         ...
       ]
     }
@@ -28,7 +32,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import media
+from . import info, media
 
 
 class ManifestError(ValueError):
@@ -46,6 +50,8 @@ class Manifest:
     baselines: tuple[bool, ...] = ()
     segments: tuple[list[dict] | None, ...] = ()
     sequential: bool = True
+    recipes: tuple[dict | None, ...] = ()
+    stats: bool = False
 
 
 def _load(path, headers: dict[str, str] | None = None):
@@ -117,6 +123,12 @@ def read(path, headers: dict[str, str] | None = None) -> Manifest:
         if not isinstance(entry, dict) or not entry.get("file"):
             raise ManifestError(f'clip {index + 1} in {path} has no "file"')
     labels = [entry.get("label") for entry in entries]
+    recipes = []
+    for index, entry in enumerate(entries):
+        try:
+            recipes.append(info.recipe(entry) or None)
+        except ValueError as exc:
+            raise ManifestError(f"clip {index + 1} in {path}: {exc}") from exc
     titles = tuple(str(title) for title in data.get("titles") or ())
     group = int(data.get("group") or 0)
     if not group and len(titles) > 1:
@@ -134,6 +146,8 @@ def read(path, headers: dict[str, str] | None = None) -> Manifest:
         baselines=tuple(bool(entry.get("baseline")) for entry in entries),
         segments=tuple(_segments(entry, index, path) for index, entry in enumerate(entries)),
         sequential=bool(data.get("sequential", True)),
+        recipes=tuple(recipes),
+        stats=bool(data.get("stats", False)),
     )
 
 

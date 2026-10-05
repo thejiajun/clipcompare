@@ -94,7 +94,8 @@ clipcompare grid --manifest megan-project/clips.json --html megan-project/compar
   "clips": [
     {"file": "megan-project/alia-1-v3-plain.mp3", "label": "v3 · plain", "prompt": "...", "baseline": true,
      "segments": [{"text": "...", "start": 0, "end": 16.2, "estimated": true}, ...]},
-    {"file": "https://cdn.example.com/alia-2.mp3", "label": "v3 · bracket", "prompt": "[warm] ..."}
+    {"file": "https://cdn.example.com/alia-2.mp3", "label": "v3 · bracket", "prompt": "[warm] ...",
+     "model": "eleven-v3", "preset": "warm", "params": {"stability": 0.5}, "cost": 0.12, "seed": 7}
   ]
 }
 ```
@@ -125,6 +126,35 @@ clipcompare grid --manifest megan-project/clips.json --html megan-project/compar
 - 单写 `--html` 只出网页；有 `-o` 或 manifest 里有 `out` 时视频和网页一起出。
 
 不用 manifest 也能加提示词：`--captions prompts.json`（字符串数组，每段一个，`null` 表示没有）；没有 baseline 时所有 tag 都标紫、没有差异摘要。
+
+## 技术信息（`--stats` 和 recipe）
+
+比画质、比参数的时候，光看画面不够，还要知道「它本来想要什么、实际出来的是什么」。规则只有一条：**所有片段都一样的信息，只在标题条里写一次；只有不一样的，才写进各自的格子**。
+
+```bash
+clipcompare grid raw.mp4 old-fit.mp4 new-fit.mp4 --stats --baseline 1
+clipcompare grid --manifest clips.json          # manifest 里写 "stats": true 也行
+```
+
+每格从上到下四层：
+
+1. **名字**（`label`）：左上角，最醒目，跟以前一样。
+2. **Recipe——本来想要什么**：manifest 里每段可以写 `model`、`preset`、`params`（任意键的对象）、`cost`、可选的 `seed`。名字下面一行小字；跟 baseline 不一样的字段用紫色 `--ds-accent-700`（跟提示词差异同一个规则）。`params` 按键逐个比，工具不认识也不需要认识任何厂商的参数名。`cost` 是数字时显示成 `$0.42`，字符串原样显示。只要 manifest 写了就显示，不需要 `--stats`。
+3. **Measured——实际出来什么**：加 `--stats` 后用 ffprobe 自动量：分辨率、视频码率、帧率、时长、视频编码 / 像素格式、音频编码 / 采样率（或 `no audio`）、文件大小；图片量分辨率、格式、大小。在格子底部一条，数字等宽（每个数字占同样宽度，几格之间能对齐）。有 baseline 时再加跟它的相似度：视频 / 图片的 **SSIM** 和 **PSNR**（尺寸不同会先缩放到 baseline 的尺寸，格子里注 `at 720×1280`，终端也会说一声），同一条音频的重新编码（两段时长相差 0.1 秒或 1% 以内）再加 **SNR**。码率、大小、时长这类没有好坏方向的数字只写相对 baseline 的变化（`5.1 Mbps −61%`），不上色；只有 SSIM / PSNR / SNR 这种有明确方向的才上色：
+4. **Prompt**：跟以前一样。
+
+| 指标 | 绿 `--ds-neon-green` | 红 `--ds-alert` |
+|------|------|------|
+| SSIM | ≥ 0.98 | < 0.90 |
+| PSNR | ≥ 40 dB | < 30 dB |
+| SNR | ≥ 30 dB | < 15 dB |
+
+完全一样的画面写 `PSNR identical`。baseline 那格写 `baseline`。
+
+三级文字：名字是主文字（Telka Medium、`--ds-eggshell`），recipe 是二级（小一号，Telka Regular），measured 是三级（再小一号，`--ds-text-secondary`）。
+
+- **baseline**：manifest 里 `"baseline": true`，或命令行 `--baseline N`（配合 `--group` 时是每组的第 N 段）。没有 baseline 时不标紫、不算相似度，但「相同的写一次」照样成立。
+- **给 agent 读的数字**：`--stats` 同时在输出旁边写一个 `<输出文件名>.stats.json`（只出网页时写在网页旁边），里面是每段的 recipe、ffprobe 量到的原始数字、跟 baseline 的比较结果和格子上显示的文字。不用解析画面就能拿到数字。
 
 ## 安装
 
@@ -167,8 +197,9 @@ brew install ffmpeg
 | 波形面板底色、标题条 | `--ds-black` | `#111111` |
 | 波形、正在播放的描边、第二个标签的字、新 tag、下划线 | `--ds-accent-700`（= `--ds-brand`） | `#cfc3ff` |
 | 标签 / 标题 / 提示词的字 | `--ds-eggshell`（暗色 `--ds-text-primary`） | `#fcfaf7` |
-| 差异摘要、`timing estimated` | `--ds-text-secondary`（暗色） | `#fcfaf7b3` |
-| 标签 / 标题的底 | `--ds-invert-600`（暗色） | `rgb(34 34 34 / 60%)` |
+| 差异摘要、`timing estimated`、标题条里的共同信息、measured | `--ds-text-secondary`（暗色） | `#fcfaf7b3` |
+| 标签 / 标题 / recipe / measured 的底 | `--ds-invert-600`（暗色） | `rgb(34 34 34 / 60%)` |
+| 相似度接近 baseline / 差得远 | `--ds-neon-green` / `--ds-alert` | `#15cb74` / `#de0000` |
 | 波形面板的中线 | `--ds-primary-300`（暗色） | `rgb(252 250 247 / 10%)` |
 
 `side` 的分隔线、`wipe` 的扫描线、`pip` 的边框仍是白色。
@@ -247,7 +278,9 @@ brew install ffmpeg
 | `--head SEC` | 每段只取前 SEC 秒（同时播放、轮流播放都适用） |
 | `--pause SEC` | 轮流播放时两段之间停多久（画面停住、没有声音），默认 0.5，`0` 无停顿 |
 | `--title TEXT` | 网格上方标题条里居中的标题（不会压到格子之间的缝）；配合 `--group` 时每组一个，逗号分隔 |
-| `--manifest FILE\|URL\|-` | 从 JSON 读片段、标签、提示词、组名和输出，见「提示词对比」 |
+| `--manifest FILE\|URL\|-` | 从 JSON 读片段、标签、提示词、recipe、组名和输出，见「提示词对比」「技术信息」 |
+| `--stats` | 量每段的技术参数和跟 baseline 的相似度，画在格子底部，另写 `.stats.json`，见「技术信息」 |
+| `--baseline N` | 第 N 段是 baseline（配合 `--group` 时是每组第 N 段）；manifest 用 `"baseline": true` |
 | `--header "NAME: VALUE"` | 拉取 URL manifest 时带的 HTTP 头，可重复 |
 | `--captions FILE` | 每段一条提示词（JSON 字符串数组），播放时显示在格子里 |
 | `--html OUT.html` | 另出一个可切换版本的网页 |
@@ -375,6 +408,7 @@ uv tool install --force .
 - 纯音频片段的波形面板只在 `grid` 里会自动铺满 16:9；`side` 两段音频出 2160×1080，`wipe` / `pip` 能用但意义不大。`--pause` 目前只有 `grid` 有。
 - 提示词排版忽略字距调整（kerning），一行最多偏几个像素；字号 15px 还放不下的段落会被截断，完整内容看网页。
 - `--group` 先把每组单独渲染、再不重编码地拼起来，所以每组的格数、尺寸都相同；某一组完全没有声音时拼接会出错。
+- `--stats`、`--baseline` 和 recipe 只在 `grid` 里有；两段对比想看技术信息就用 `grid a.mp4 b.mp4`（画面也是并排一行）。
 - `side` / `wipe` / `pip` 只吃两段；三段以上用 `grid`。`grid` 的片段越多，ffmpeg 同时解码的路数越多，渲染越慢。
 
 ## License

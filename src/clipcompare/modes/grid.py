@@ -40,6 +40,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .. import captions as captions_mod
+from .. import info as info_mod
 from .. import prompts as prompts_mod
 from ..filters import (
     LENGTH_EPSILON,
@@ -78,6 +79,8 @@ AUDIO_ROW = 4                # ...and up to this many of them sit in one row
 IMAGE_ROW = 4                # images too: up to this many sit side by side in one row
 AUDIO_MODES = ("auto", "none", "mix")
 HEADER = 0.1             # --title strip height, as a share of the canvas's short edge
+SHARED = 0.05            # ...and the shared-info line's under it (or alone)
+MEASURED = 0.7           # measured strip text size, as a share of the label's
 SUMMARY = 0.8            # diff summary size, as a share of the label's
 
 
@@ -98,6 +101,8 @@ class Options(Common):
     prompts: tuple[prompts_mod.ClipPrompt | None, ...] = ()   # per clip, see prompts.prepare
     caption_fonts: captions_mod.Fonts | None = None
     caption_size: int = 0      # prompt text size; 0 fits it to these clips' longest segment
+    info: info_mod.Run | None = None   # recipe / measured layers, see info.py
+    info_font: Path | None = None      # their text face (the design system's copy weight)
 
 
 def grid_shape(count: int, tile_aspect: float, cols: int = 0, rows: int = 0) -> tuple[int, int]:
@@ -116,13 +121,24 @@ def header_px(short: int) -> int:
     return even(round(short * HEADER))
 
 
-def audio_tiles(cols: int, rows: int, gap: int, header: bool = False) -> tuple[int, int, int, int]:
+def shared_px(short: int) -> int:
+    return even(round(short * SHARED))
+
+
+def header_height(short: int, title: bool, shared: bool) -> int:
+    """The title bar: the --title band, the shared-info band under it, or both."""
+    return (header_px(short) if title else 0) + (shared_px(short) if shared else 0)
+
+
+def audio_tiles(
+    cols: int, rows: int, gap: int, header: bool = False, shared: bool = False,
+) -> tuple[int, int, int, int]:
     """tile_size for clips that are all audio: share AUDIO_CANVAS between them,
-    less the --title header strip, so the whole video stays 1920x1080."""
+    less the title bar, so the whole video stays 1920x1080."""
     canvas_w, canvas_h = AUDIO_CANVAS
     spacing = gap_px(gap, canvas_h)
-    if header:
-        canvas_h -= header_px(canvas_h)
+    if header or shared:
+        canvas_h -= header_height(canvas_h, header, shared)
     width = even((canvas_w - (cols - 1) * spacing) // cols)
     height = even((canvas_h - (rows - 1) * spacing) // rows)
     return width, height, min(width, height), spacing
@@ -278,8 +294,10 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     else:
         cols, rows = grid_shape(count, first.width / first.height, opts.cols, opts.rows)
     titled = bool(opts.title and opts.title_font and label_dir is not None)
+    run_info = opts.info if opts.info and opts.info_font and label_dir is not None else None
+    shared_text = run_info.shared_text if run_info else ""
     if all_audio and not opts.panel:
-        tile_w, tile_h, short, gap = audio_tiles(cols, rows, opts.gap, titled)
+        tile_w, tile_h, short, gap = audio_tiles(cols, rows, opts.gap, titled, bool(shared_text))
     else:
         # Stills keep their own pixels: the auto size never scales them up.
         cap = min(MAX_TILE, first.width, first.height) if still else MAX_TILE
@@ -288,9 +306,14 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         tile_w, tile_h, short, gap = tile_size(first, cols, rows, panel, opts.gap, cap)
     grid_w = cols * tile_w + (cols - 1) * gap
     grid_h = rows * tile_h + (rows - 1) * gap
-    header = 0
-    if titled:
-        header = AUDIO_CANVAS[1] - grid_h if all_audio and not opts.panel else header_px(min(grid_w, grid_h))
+    header = shared_band = 0
+    if titled or shared_text:
+        reference = AUDIO_CANVAS[1] if all_audio and not opts.panel else min(grid_w, grid_h)
+        shared_band = shared_px(reference) if shared_text else 0
+        header = (
+            AUDIO_CANVAS[1] - grid_h if all_audio and not opts.panel
+            else header_height(reference, titled, bool(shared_text))
+        )
     out_w, out_h = grid_w, grid_h + header
     cells = [((index % cols) * (tile_w + gap), (index // cols) * (tile_h + gap)) for index in range(count)]
     # Where each tile lands on the finished canvas, below the header.
@@ -337,13 +360,37 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     metrics = LabelMetrics.for_reference(short)
     pre_commands: list[list[str]] = []
     caption_size = 0
+    painted = info_pictures(run_info, opts, label_dir, (tile_w, tile_h), metrics) if run_info else []
+    reserved = [(top.height if top else 0, bottom.height if bottom else 0) for top, bottom in painted]
     if opts.prompts and any(opts.prompts) and opts.caption_fonts and label_dir is not None:
         last, caption_size = prompt_steps(
             clips, opts, label_dir, spots, (tile_w, tile_h), metrics,
             min(out_w, AUDIO_CANVAS[1] if all_audio else out_h) / 1080,
             turns or [(0.0, clip.duration) for clip in clips], holds, fps,
-            steps, inputs, pre_commands, last, still,
+            steps, inputs, pre_commands, last, still, reserved,
         )
+    for index, ((top, bottom), (x, y)) in enumerate(zip(painted, spots)):
+        # The recipe sits under the label, the measured strip along the bottom.
+        label_bottom = metrics.inset + metrics.size + 2 * metrics.pad_v
+        for name, picture_, at in (
+            ("r", top, (x + metrics.inset, y + label_bottom + metrics.inset // 2)),
+            ("m", bottom, (x, y + tile_h - (bottom.height if bottom else 0))),
+        ):
+            if picture_ is None:
+                continue
+            pre_commands.append(picture_.command)
+            source = len(inputs)
+            image = picture_.command[-1]
+            if still:
+                inputs.append(image)
+                steps.append(f"[{last}][{source}:v]overlay={at[0]}:{at[1]}:format=rgb[i{name}{index}]")
+            else:
+                inputs.append((["-loop", "1", "-framerate", fps], image))
+                steps.append(
+                    f"[{last}][{source}:v]overlay={at[0]}:{at[1]}:shortest=1"
+                    f"{':format=auto' if opts.lossless else ''}[i{name}{index}]"
+                )
+            last = f"i{name}{index}"
 
     if opts.labels and label_dir is not None:
         assert opts.fonts is not None
@@ -358,17 +405,34 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         steps.append(f"[{last}]{','.join(texts)}[lv]")
         last = "lv"
 
-    if header:
+    if header and titled:
         assert opts.title and opts.title_font
-        title_metrics = LabelMetrics.for_reference(round(header / HEADER * 1.3))
+        band = header - shared_band
+        title_metrics = LabelMetrics.for_reference(round(band / HEADER * 1.3))
         title_file = label_dir / "title.txt"
         title_file.write_text(opts.title, encoding="utf-8")
         steps.append(
             f"[{last}]drawtext=textfile={escape(str(title_file))}:fontfile={escape(str(opts.title_font))}"
             f":fontsize={title_metrics.size}:expansion=none:fontcolor={opts.color_a}"
-            f":y_align=font:x=(w-tw)/2:y={(header - title_metrics.size) // 2}[tv]"
+            f":y_align=font:x=(w-tw)/2:y={(band - title_metrics.size) // 2}[tv]"
         )
         last = "tv"
+    if header and shared_text:
+        # What every clip shares, said once.
+        assert opts.info_font
+        size = max(round(shared_band * 0.45), 8)
+        shared_file = label_dir / "shared.txt"
+        shared_file.write_text(
+            captions_mod.ellipsize_text(shared_text, out_w - 2 * metrics.inset, size, opts.info_font),
+            encoding="utf-8",
+        )
+        top = header - shared_band - (metrics.inset // 3 if titled else 0)
+        steps.append(
+            f"[{last}]drawtext=textfile={escape(str(shared_file))}:fontfile={escape(str(opts.info_font))}"
+            f":fontsize={size}:expansion=none:fontcolor={DS_TEXT_SECONDARY_DARK}"
+            f":y_align=font:x=(w-tw)/2:y={top + (shared_band - size) // 2}[sh]"
+        )
+        last = "sh"
 
     if still:
         audio, audio_steps, output = "none", [], still_args(opts.out)
@@ -400,15 +464,54 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     )
 
 
-def prompt_region(tile_w: int, tile_h: int, metrics: LabelMetrics, is_audio: bool) -> tuple[int, int, int, int, int]:
+def info_pictures(
+    run: info_mod.Run, opts: Options, label_dir: Path, tile: tuple[int, int], metrics: LabelMetrics,
+) -> list[tuple[info_mod.Painted | None, info_mod.Painted | None]]:
+    """Per tile, the recipe line (a chip under the label) and the measured
+    strip (along the bottom), each painted once into a PNG."""
+    assert opts.info_font
+    tile_w, _ = tile
+    font = opts.info_font
+    recipe_size = max(round(metrics.size * SUMMARY), 8)
+    measured_size = max(round(metrics.size * MEASURED), 8)
+    pad_v, pad_h = max(metrics.pad_v // 2, 2), max(metrics.pad_h // 2, 4)
+    out = []
+    for index, tile_info in enumerate(run.tiles):
+        top = bottom = None
+        spans = info_mod.recipe_spans(tile_info)
+        if spans:
+            line = info_mod.fit_line(spans, tile_w - 2 * metrics.inset - 2 * pad_h, font, recipe_size)
+            top = info_mod.paint(
+                [line], font, recipe_size, label_dir / f"recipe-{index}.png", label_dir,
+                background=opts.label_bg, pad_v=pad_v, pad_h=pad_h,
+            )
+        lines = [
+            info_mod.fit_line(line, tile_w - 2 * metrics.inset, font, measured_size)
+            for line in info_mod.measured_lines(tile_info)
+        ]
+        if lines:
+            bottom = info_mod.paint(
+                lines, font, measured_size, label_dir / f"measured-{index}.png", label_dir,
+                width=tile_w, background=opts.label_bg, pad_v=pad_v, pad_h=metrics.inset,
+            )
+        out.append((top, bottom))
+    return out
+
+
+def prompt_region(
+    tile_w: int, tile_h: int, metrics: LabelMetrics, is_audio: bool, reserved: tuple[int, int] = (0, 0),
+) -> tuple[int, int, int, int, int]:
     """(left, summary y, prompt top, prompt width, prompt height) inside a
-    tile: the summary line sits under the label, the prompt under that, and
-    on an audio tile it stops above the waveform band."""
+    tile: the summary line sits under the label (and its recipe line, the
+    `reserved` top), the prompt under that, and it stops above the measured
+    strip (the `reserved` bottom) and, on an audio tile, the waveform band."""
     label_bottom = metrics.inset + metrics.size + 2 * metrics.pad_v
-    summary_y = label_bottom + metrics.inset // 2
+    summary_y = label_bottom + metrics.inset // 2 + (reserved[0] + metrics.inset // 2 if reserved[0] else 0)
     top = summary_y + round(metrics.size * SUMMARY) + metrics.inset
     pad = 0 if is_audio else metrics.pad_v
     bottom = wave_band(tile_h)[0] - metrics.inset // 2 if is_audio else tile_h - metrics.inset
+    if reserved[1]:
+        bottom = min(bottom, tile_h - reserved[1] - metrics.inset // 2)
     return metrics.inset, summary_y, top, tile_w - 2 * metrics.inset - 2 * pad, bottom - top - 2 * pad
 
 
@@ -417,6 +520,7 @@ def prompt_steps(
     tile: tuple[int, int], metrics: LabelMetrics, scale: float, turns: list[tuple[float, float]],
     holds: tuple[float, ...], fps: str, steps: list[str], inputs: list[Input],
     pre_commands: list[list[str]], last: str, still: bool = False,
+    reserved: list[tuple[int, int]] | None = None,
 ) -> tuple[str, int]:
     """Each tile's diff summary under its label, and while it plays, one PNG
     per prompt segment (a pre-command each), shown during that segment's
@@ -425,7 +529,10 @@ def prompt_steps(
     fonts = opts.caption_fonts
     assert fonts is not None
     tile_w, tile_h = tile
-    regions = [prompt_region(tile_w, tile_h, metrics, clip.is_audio) for clip in clips]
+    reserved = reserved or [(0, 0)] * len(clips)
+    regions = [
+        prompt_region(tile_w, tile_h, metrics, clip.is_audio, space) for clip, space in zip(clips, reserved)
+    ]
     if still:
         # One untimed segment per prompt: nothing plays, so nothing steps through.
         opts = replace(opts, prompts=tuple(
@@ -495,16 +602,17 @@ def prompt_steps(
 
 def build_groups(
     groups: list[list[ClipInfo]], opts: Options, titles: tuple[str | None, ...], label_dir: Path,
+    infos: tuple[info_mod.Run | None, ...] = (),
 ) -> Plan:
     """--group: each run rendered as its own grid into the working folder, then
     joined without re-encoding. Every run has the same tile count and settings,
     so their streams match and the join is a plain copy."""
     size = len(groups[0])
-    parts = _build_runs(groups, opts, titles, label_dir)
+    parts = _build_runs(groups, opts, titles, label_dir, infos)
     sizes = {plan.caption_size for plan in parts if plan.caption_size}
     if len(sizes) > 1 and not opts.caption_size:
         # One prompt size for the whole video: the one the densest run needed.
-        parts = _build_runs(groups, replace(opts, caption_size=min(sizes)), titles, label_dir)
+        parts = _build_runs(groups, replace(opts, caption_size=min(sizes)), titles, label_dir, infos)
 
     listing = label_dir / "groups.txt"
     listing.write_text("".join(f"file '{plan.command[-1]}'\n" for plan in parts), encoding="utf-8")
@@ -530,6 +638,7 @@ def build_groups(
 
 def _build_runs(
     groups: list[list[ClipInfo]], opts: Options, titles: tuple[str | None, ...], label_dir: Path,
+    infos: tuple[info_mod.Run | None, ...] = (),
 ) -> list[Plan]:
     size = len(groups[0])
     parts: list[Plan] = []
@@ -547,6 +656,7 @@ def _build_runs(
             holds=opts.holds[span] if opts.holds else (),
             prompts=opts.prompts[span] if opts.prompts else (),
             title=titles[number],
+            info=infos[number] if infos else None,
             tail=opts.pause if number < len(groups) - 1 else 0.0,
         )
         parts.append(build(group, part, part_dir))

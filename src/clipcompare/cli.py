@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import re
 import shlex
@@ -14,7 +15,7 @@ import tempfile
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, fonts, manifest, media, page
+from . import __version__, fonts, info, manifest, media, page, stats
 from . import prompts as prompts_mod
 from .captions import Fonts as CaptionFonts
 from .filters import AUDIO_CHOICES, FITS, IMAGE_EXTENSIONS, LENGTHS, LOSSLESS, LOSSLESS_EXTENSION, Plan
@@ -192,6 +193,16 @@ def _add_grid_parser(subparsers) -> None:
         "--html", type=Path, metavar="OUT.html",
         help="also (or, without -o and a manifest \"out\", only) write a self-contained web page: "
              "one player per group that switches versions at the same point in the script",
+    )
+    grid.add_argument(
+        "--stats", action="store_true",
+        help="measure every clip (resolution, bitrate, rate, length, codecs, size; SSIM / PSNR / SNR "
+             "against the baseline) into a strip along each tile, and into <out>.stats.json",
+    )
+    grid.add_argument(
+        "--baseline", type=int, default=0, metavar="N",
+        help="clip N (with --group, the N-th of every run) is the reference others are compared and "
+             "diffed against (a manifest marks it with \"baseline\": true)",
     )
     grid.add_argument(
         "--manifest", metavar="FILE|URL|-",
@@ -441,12 +452,13 @@ def _make_plan(mode: str, args, clips: list[ClipInfo], out, label_fonts, label_d
             length=args.length, sequential=args.sequential, pause=args.pause if args.sequential else 0.0,
             holds=tuple(_hold(clip) for clip in clips) if args.sequential and not args._still else (),
             title_font=args._title_font,
-            prompts=args._prompts, caption_fonts=args._caption_fonts,
+            prompts=args._prompts, caption_fonts=args._caption_fonts, info_font=args._info_font,
         )
         if args.group:
             runs = [clips[start:start + args.group] for start in range(0, len(clips), args.group)]
-            return grid_mode.build_groups(runs, opts, args._titles, label_dir)
+            return grid_mode.build_groups(runs, opts, args._titles, label_dir, args._infos)
         opts.title = args._titles[0]
+        opts.info = args._infos[0] if args._infos else None
         return grid_mode.build(clips, opts, label_dir)
     a, b = clips
     if mode == "side":
@@ -514,6 +526,7 @@ def _apply_manifest(args: argparse.Namespace) -> None:
     args._captions = ()
     args._baselines = ()
     args._segments = ()
+    args._recipes = ()
     args._manifest_labels = None
     try:
         if args.manifest is not None:
@@ -529,6 +542,8 @@ def _apply_manifest(args: argparse.Namespace) -> None:
             args._captions = spec.captions if any(spec.captions) else ()
             args._baselines = spec.baselines
             args._segments = spec.segments
+            args._recipes = spec.recipes if any(spec.recipes) else ()
+            args.stats = args.stats or spec.stats
             args.sequential = args.sequential or spec.sequential
             if spec.titles and not args.title:
                 args.title = ",".join(spec.titles) if len(spec.titles) > 1 else spec.titles[0]
@@ -540,6 +555,12 @@ def _apply_manifest(args: argparse.Namespace) -> None:
             args._baselines = args._segments = ()
     except manifest.ManifestError as exc:
         raise SystemExit(f"clipcompare: {exc}") from exc
+    if args.baseline:
+        count = len(args.clips)
+        size = args.group or count
+        if not 1 <= args.baseline <= size:
+            raise SystemExit(f"clipcompare: --baseline takes a clip number 1-{size}")
+        args._baselines = tuple(index % size == args.baseline - 1 for index in range(count))
 
 
 def _run(mode: str, args: argparse.Namespace) -> int:
@@ -580,6 +601,14 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             prompts_mod.prepare(args._captions, args._baselines, args._segments, args.group)
             if args._captions else ()
         )
+        args._report = _measure(args, paths, names) if args.stats or args._recipes else None
+        args._infos = tuple(run["info"] for run in args._report) if args._report else ()
+        if args._report and args.stats:
+            for run in args._report:
+                for clip in run["clips"]:
+                    scaled = (clip.get("vs_baseline") or {}).get("scaled_to")
+                    if scaled:
+                        print(f"[grid] stats: {clip['label']} is compared with the baseline scaled to {scaled}")
         if args.html is not None:
             labels = _labels(args, names) or tuple(_label_from_path(path) for path in names)
             page.write(args.html, page.build(
@@ -588,6 +617,7 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             ))
             print(f"[grid] page: {args.html}")
             if args.out is None:
+                _write_report(args, args.html)
                 return 0
 
     out = args.out or _default_out(mode, names, args._still, args.lossless)
@@ -603,6 +633,7 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             label_fonts = (args.font,) * len(paths)
             args._title_font = args.font
             args._caption_fonts = CaptionFonts(body=args.font, tag=args.font)
+            args._info_font = args.font
         else:
             # The bundled font has no CJK glyphs — a Chinese label (which a
             # Chinese filename gives you by default) needs a system face.
@@ -616,6 +647,7 @@ def _run(mode: str, args: argparse.Namespace) -> int:
                 (args._title_font,), title_unserved = fonts.resolve([" ".join(titled)], title_font)
                 unserved = unserved or title_unserved
             args._caption_fonts = _caption_fonts(stack, label_font, getattr(args, "_captions", ()) or ())
+            args._info_font = fonts.find_installed(DS_FONT_BODY) or label_font
             if unserved:
                 print(
                     "clipcompare: no CJK font found — non-Latin labels will render as "
@@ -652,9 +684,86 @@ def _run(mode: str, args: argparse.Namespace) -> int:
     size_mb = out.stat().st_size / 1_000_000
     shape = f"{written.width}x{written.height}" if args._still else f"{written.duration:.1f}s"
     print(f"[{plan.mode}] done: {out}  ({shape}, {size_mb:.1f} MB)")
+    if mode == "grid":
+        _write_report(args, out)
     if args.open and sys.platform == "darwin":
         subprocess.run(["open", str(out)], check=False)
     return 0
+
+
+def _measure(args: argparse.Namespace, paths: list[Path], names: list[Path]) -> list[dict]:
+    """Per run (each --group, or all clips): every clip's recipe, and with
+    --stats what ffprobe and the baseline comparison measured, plus the
+    display model (info.Run) the tiles and the page draw."""
+    count = len(paths)
+    size = args.group or count
+    recipes = list(args._recipes) or [None] * count
+    baselines = list(args._baselines) or [False] * count
+    sources = [str(clip) for clip in args.clips]
+    labels = _labels(args, names) or tuple(_label_from_path(path) for path in names)
+    measures = [stats.measure(path) for path in paths] if args.stats else [None] * count
+    runs = []
+    for start in range(0, count, size):
+        span = list(range(start, min(start + size, count)))
+        base = next((i for i in span if baselines[i]), None)
+        comparisons = [
+            stats.compare(paths[i], measures[i], paths[base], measures[base])
+            if args.stats and base is not None and i != base else None
+            for i in span
+        ]
+        run_info = info.describe(
+            [recipes[i] for i in span], [measures[i] for i in span], comparisons,
+            None if base is None else base - start,
+        )
+        runs.append({
+            "info": run_info,
+            "baseline": None if base is None else base - start,
+            "clips": [
+                {
+                    "file": sources[i], "label": labels[i], "baseline": i == base,
+                    "recipe": recipes[i], "measured": measures[i], "vs_baseline": comparison,
+                }
+                for i, comparison in zip(span, comparisons)
+            ],
+        })
+    return runs
+
+
+def _finite(value):
+    """JSON has no infinity: an identical PSNR is written as "inf"."""
+    if isinstance(value, float) and value == float("inf"):
+        return "inf"
+    if isinstance(value, dict):
+        return {key: _finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(item) for item in value]
+    return value
+
+
+def _write_report(args: argparse.Namespace, out: Path) -> None:
+    """--stats: what was measured, next to the output, for agents to read."""
+    if not (args.stats and args._report):
+        return
+    titles = _titles(args, len(args.clips))
+    report = {
+        "clipcompare": __version__,
+        "output": out.name,
+        "groups": [
+            {
+                "title": titles[number] if number < len(titles) else None,
+                "baseline": run["baseline"],
+                "shared": [item.text for item in run["info"].shared],
+                "clips": [
+                    {**clip, "tile": info.as_json(info.Run(tiles=(tile,)))["tiles"][0]}
+                    for clip, tile in zip(run["clips"], run["info"].tiles)
+                ],
+            }
+            for number, run in enumerate(args._report)
+        ],
+    }
+    path = out.with_name(out.name + ".stats.json")
+    path.write_text(json.dumps(_finite(report), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"[grid] stats: {path}")
 
 
 def _page_sources(sources: list, paths: list[Path], html: Path, copy: bool) -> list[str]:
