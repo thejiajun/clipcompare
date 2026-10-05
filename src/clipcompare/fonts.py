@@ -1,6 +1,7 @@
 """Font selection.
 
-The bundled TikTok Sans covers Latin only, so a label carrying CJK — which is
+Labels default to the design system's Telka when it is installed (see
+tokens.py), the bundled TikTok Sans otherwise. Both cover Latin only, so a label carrying CJK — which is
 what you get for free from a Chinese filename — would render as tofu boxes.
 Labels are therefore matched to a font one by one, falling back to a system
 CJK face only for the labels that actually need it.
@@ -8,6 +9,7 @@ CJK face only for the labels that actually need it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 # Ranges worth switching fonts for: CJK ideographs (plus the common extension
@@ -37,6 +39,27 @@ _CJK_CANDIDATES = (
 )
 
 
+# Where an installed font file can live; the first match wins.
+_FONT_DIRS = (
+    Path.home() / "Library" / "Fonts",
+    Path("/Library/Fonts"),
+    Path.home() / ".local" / "share" / "fonts",
+    Path.home() / ".fonts",
+    Path("/usr/share/fonts"),
+    Path("/usr/local/share/fonts"),
+)
+
+
+def find_installed(filename: str, dirs: Sequence[Path] = _FONT_DIRS) -> Path | None:
+    """An installed font file by name, searched one folder deep (Linux font
+    folders are usually split per family)."""
+    for folder in dirs:
+        for candidate in (folder / filename, *folder.glob(f"*/{filename}")):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def needs_cjk(text: str) -> bool:
     return any(
         any(low <= ord(char) <= high for low, high in _CJK_RANGES)
@@ -52,8 +75,9 @@ def find_cjk_font() -> Path | None:
     return None
 
 
-def resolve(labels: tuple[str, str], default: Path) -> tuple[tuple[Path, Path], bool]:
-    """Pick a font per label. Returns the pair plus whether CJK text went unserved."""
+def resolve(labels: Sequence[str], default: Path) -> tuple[tuple[Path, ...], bool]:
+    """Pick a font per label. Returns one font per label, in order, plus whether
+    CJK text went unserved."""
     cjk_font = None
     unserved = False
     chosen = []
@@ -68,4 +92,4 @@ def resolve(labels: tuple[str, str], default: Path) -> tuple[tuple[Path, Path], 
             chosen.append(default)
         else:
             chosen.append(cjk_font)
-    return (chosen[0], chosen[1]), unserved
+    return tuple(chosen), unserved
