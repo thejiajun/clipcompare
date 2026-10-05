@@ -9,7 +9,7 @@ clipcompare pip  before.mp4 after.mp4    # 画中画
 clipcompare grid a.mp4 b.mp4 c.mp4 ...   # N×M 网格
 ```
 
-命令只有 `clipcompare` 一个。嫌长可以在自己的 shell 里加 `alias sbs=clipcompare`，工具本身不带这个别名。模式名 `sbs` 等同于 `side`（`clipcompare sbs a.mp4 b.mp4`）。
+命令只有 `clipcompare` 一个。嫌长可以在自己的 shell 里加 `alias sbs=clipcompare`，工具本身不带这个别名。并排模式只叫 `side`。
 
 ## 四种模式
 

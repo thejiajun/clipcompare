@@ -17,9 +17,15 @@ def test_missing_mode_suggests_a_pasteable_line(tmp_path, capsys, monkeypatch):
     assert "clipcompare side" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("alias,expected", [("sbs", "side"), ("render", "side"), ("pict", "pip")])
-def test_mode_aliases_resolve(alias, expected):
-    assert cli.MODE_ALIASES[alias] == expected
+def test_pip_alias_resolves():
+    assert cli.MODE_ALIASES["pict"] == "pip"
+
+
+@pytest.mark.parametrize("name", ["sbs", "render"])
+def test_side_has_one_name(name):
+    assert name not in cli.MODE_ALIASES
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args([name, "a.mp4", "b.mp4"])
 
 
 def test_three_bare_clips_suggest_grid(tmp_path, capsys, monkeypatch):

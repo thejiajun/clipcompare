@@ -26,7 +26,7 @@ from .probe import ClipInfo, ProbeError, lead_in_black, probe, require_binaries
 
 FONT_NAME = "TikTokSans-Medium.ttf"
 MODES = ("side", "wipe", "pip", "grid")
-MODE_ALIASES = {"sbs": "side", "render": "side", "pict": "pip", "mosaic": "grid"}
+MODE_ALIASES = {"pict": "pip", "mosaic": "grid"}
 
 
 def _bundled_font(stack: contextlib.ExitStack) -> Path:
@@ -264,8 +264,7 @@ def _parser() -> argparse.ArgumentParser:
             "  clipcompare wipe before.mp4 after.mp4 --direction lr --pace early\n"
             "  clipcompare pip  before.mp4 after.mp4 --corner tr\n"
             "  clipcompare grid take-*.mp4 --sequential --head 8\n"
-            "  clipcompare grid v3.mp3 v4.mp3 --sequential   # audio becomes a waveform\n"
-            "\n`sbs` also works in place of the `side` mode."
+            "  clipcompare grid v3.mp3 v4.mp3 --sequential   # audio becomes a waveform"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -273,7 +272,7 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="MODE")
 
     side = subparsers.add_parser(
-        "side", aliases=["sbs", "render"],
+        "side",
         help="both clips on screen at once, left-right or top-bottom",
         description="Both clips on screen at once, left-right or top-bottom.",
     )
