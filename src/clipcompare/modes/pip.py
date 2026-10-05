@@ -32,11 +32,13 @@ from ..filters import (
     encode_args,
     even,
     ffmpeg_head,
+    frame_chain,
     freeze_pads,
     geometry,
+    lossless_pix_fmt,
     picture,
     resolve_fps,
-    scale_chain,
+    scale_notes,
     write_label_files,
 )
 from ..probe import ClipInfo
@@ -127,10 +129,19 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         pad_main = pad_inset = ""
         shortest = 1
 
-    main_chain = scale_chain(opts.fit, out_w, out_h, fps)
-    inset_chain = (
-        f"fps={fps},{geometry(opts.fit, inset_w, inset_h)},setsar=1,format=yuva420p"
-    )
+    pix_fmt = lossless_pix_fmt([a, b], opts.lossless) if opts.lossless else "yuv420p"
+    main_chain = frame_chain(main, opts.fit, out_w, out_h, fps, opts.lossless, pix_fmt)
+    if opts.lossless:
+        # The inset is small by design, so it is always scaled: with lanczos,
+        # in the output's chroma, and every overlay keeps that format.
+        inset_geometry = geometry(opts.fit, inset_w, inset_h).replace(
+            f"scale={inset_w}:{inset_h}:", f"scale={inset_w}:{inset_h}:flags=lanczos:", 1,
+        )
+        inset_chain = f"fps={fps},{inset_geometry},setsar=1,format=yuva{pix_fmt[3:]}"
+        keep = ":format=auto"
+    else:
+        inset_chain = f"fps={fps},{geometry(opts.fit, inset_w, inset_h)},setsar=1,format=yuva420p"
+        keep = ""
 
     # An audio-only clip's waveform runs flat to the end instead of freezing.
     longest = max(a.duration, b.duration) if opts.length == "longest" else 0.0
@@ -157,13 +168,13 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
             "[plate][3:v]alphamerge=shortest=1[platei]",
             # The picture sits `stroke` in from every edge, so the band of
             # plate left showing is the border, curve included.
-            f"[platei][vinsr]overlay={stroke}:{stroke}:shortest=1[insbox]",
+            f"[platei][vinsr]overlay={stroke}:{stroke}:shortest=1{keep}[insbox]",
         ]
         inset_label = "insbox"
     else:
         inset_label = "vinsr"
 
-    steps.append(f"[vmain][{inset_label}]overlay={box_x}:{box_y}:shortest={shortest}[ov]")
+    steps.append(f"[vmain][{inset_label}]overlay={box_x}:{box_y}:shortest={shortest}{keep}[ov]")
     last = "ov"
 
     if opts.labels and label_dir is not None:
@@ -212,7 +223,7 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         pre_commands.append(mask_command(path, width, height, mask_radius))
 
     cmd = ffmpeg_head(inputs, ";".join(steps))
-    cmd += audio_args(audio) + encode_args(opts)
+    cmd += audio_args(audio, lossless=opts.lossless) + encode_args(opts, pix_fmt)
     if opts.length == "shortest":
         cmd += ["-shortest"]
     cmd += [str(opts.out)]
@@ -227,7 +238,13 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         detail=(
             f"inset={opts.inset} @{opts.corner}, {inset_w}x{inset_h}, "
             f"radius={radius}px, stroke={stroke}px"
+            + (f", lossless {opts.lossless} {pix_fmt}" if opts.lossless else "")
         ),
         command=cmd,
         pre_commands=pre_commands,
+        notes=scale_notes([main], [(out_w, out_h)], opts.fit, opts.lossless, [main_index + 1]) + (
+            [f"lossless: the inset ({clips[inset_index].width}x{clips[inset_index].height}) is scaled "
+             f"to {inset_w}x{inset_h} (lanczos); the full-frame clip keeps its pixels"]
+            if opts.lossless and not clips[inset_index].is_audio else []
+        ),
     )

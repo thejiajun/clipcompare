@@ -12,6 +12,13 @@ FITS = ("cover", "contain")
 LENGTHS = ("shortest", "longest")
 AUDIO_CHOICES = ("a", "b", "both", "none")
 
+# --lossless codecs, the default first. hevc: x265 in lossless mode, so every
+# clip pixel placed at its own size comes out bit-exact, and QuickTime and
+# Finder play it (8-bit 4:2:0 is plain HEVC Main). prores: ProRes 4444, for
+# editing apps — visually lossless, not bit-exact. Both write a .mov with PCM sound.
+LOSSLESS = ("hevc", "prores")
+LOSSLESS_EXTENSION = ".mov"
+
 # Output extensions that make a still picture rather than a video.
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 
@@ -50,6 +57,7 @@ class Common:
     crf: int = 18
     preset: str = "medium"
     head: float | None = None               # use only the first SEC of every clip
+    lossless: str | None = None             # one of LOSSLESS: no recompression, no rescaling
 
 
 @dataclass
@@ -67,6 +75,7 @@ class Plan:
     # Commands that must run before `command` (pip renders its mask first).
     pre_commands: list[list[str]] = field(default_factory=list)
     caption_size: int = 0   # grid: the prompt text size it settled on
+    notes: list[str] = field(default_factory=list)  # lines worth telling the user (--lossless rescales)
 
 
 def escape(value: str) -> str:
@@ -105,6 +114,77 @@ def geometry(fit: str, width: int, height: int) -> str:
 
 def scale_chain(fit: str, width: int, height: int, fps: str) -> str:
     return f"fps={fps},{geometry(fit, width, height)},setsar=1,format=yuv420p"
+
+
+def lossless_pix_fmt(clips: list[ClipInfo], codec: str | None) -> str:
+    """The output pixel format --lossless keeps every clip's pixels in: the
+    widest chroma and depth among the clips, so nothing is subsampled. A still
+    image is RGB and needs 4:4:4. ProRes 4444 is always 10-bit 4:4:4."""
+    if codec == "prores":
+        return "yuv444p10le"
+    formats = [clip.pix_fmt for clip in clips if not clip.is_audio]
+    full = any(clip.is_image for clip in clips) or any(
+        tag in fmt for fmt in formats for tag in ("444", "422", "440", "rgb", "gbr", "bgr", "argb")
+    )
+    deep = any(
+        any(tag in fmt for tag in ("p10", "p12", "p16", "10le", "12le", "16le", "10be", "12be", "16be", "p010", "p210", "p410"))
+        for fmt in formats
+    )
+    return f"yuv{'444' if full else '420'}p{'10le' if deep else ''}"
+
+
+def native_geometry(clip: ClipInfo, fit: str, width: int, height: int) -> tuple[str, bool]:
+    """--lossless: (filters, scaled) placing a clip in a width x height panel
+    without touching its pixels where it can — as is when it matches, padded
+    with black around it when it is smaller, a one-pixel crop for an odd size.
+    Only a clip larger than the panel is scaled, with lanczos (scaled=True)."""
+    if clip.is_audio or (clip.width, clip.height) == (width, height):
+        return "", False
+    if clip.width <= width + 1 and clip.height <= height + 1:
+        steps = []
+        if clip.width > width or clip.height > height:
+            steps.append(f"crop={min(clip.width, width)}:{min(clip.height, height)}:0:0")
+        w, h = min(clip.width, width), min(clip.height, height)
+        if (w, h) != (width, height):
+            # Even offsets keep 4:2:0 chroma samples on their own grid.
+            steps.append(f"pad={width}:{height}:{even((width - w) // 2)}:{even((height - h) // 2)}:color=black")
+        return ",".join(steps), False
+    return geometry(fit, width, height).replace(
+        f"scale={width}:{height}:", f"scale={width}:{height}:flags=lanczos:", 1,
+    ), True
+
+
+def frame_chain(
+    clip: ClipInfo, fit: str, width: int, height: int, fps: str, lossless: str | None = None, pix_fmt: str = "yuv420p",
+) -> str:
+    """One clip's picture fitted to its panel: scale_chain, or with --lossless
+    native_geometry in `pix_fmt`."""
+    if not lossless:
+        return scale_chain(fit, width, height, fps)
+    place, _ = native_geometry(clip, fit, width, height)
+    return ",".join(step for step in (f"fps={fps}", place, "setsar=1", f"format={pix_fmt}") if step)
+
+
+def scale_notes(
+    clips: list[ClipInfo], sizes: list[tuple[int, int]], fit: str, lossless: str | None,
+    numbers: list[int] | None = None,
+) -> list[str]:
+    """--lossless: one line per clip that had to be scaled after all."""
+    if not lossless:
+        return []
+    notes = []
+    for number, clip, (width, height) in zip(numbers or range(1, len(clips) + 1), clips, sizes):
+        if native_geometry(clip, fit, width, height)[1]:
+            notes.append(
+                f"lossless: clip {number} ({clip.width}x{clip.height}) is larger than its "
+                f"{width}x{height} panel, so it was scaled (lanczos); pass --panel to keep its pixels"
+            )
+    return notes
+
+
+def native_panel(clip: ClipInfo) -> int:
+    """--lossless default panel: the first clip's own short edge."""
+    return even(min(clip.width, clip.height))
 
 
 def still_chain(fit: str, width: int, height: int) -> str:
@@ -215,16 +295,28 @@ def audio_plan(a: ClipInfo, b: ClipInfo, requested: str) -> str:
     return "none"
 
 
-def audio_args(audio: str, index_a: int = 0, index_b: int = 1) -> list[str]:
+def audio_args(audio: str, index_a: int = 0, index_b: int = 1, lossless: str | None = None) -> list[str]:
+    # --lossless keeps the decoded sound as 24-bit PCM rather than re-encoding it.
+    codec = ["-c:a", "pcm_s24le"] if lossless else ["-c:a", "aac", "-b:a", "192k"]
     if audio == "both":
-        return ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
+        return ["-map", "[aout]", *codec]
     if audio in ("a", "b"):
         stream = f"{index_a if audio == 'a' else index_b}:a"
-        return ["-map", stream, "-c:a", "aac", "-b:a", "192k"]
+        return ["-map", stream, *codec]
     return ["-an"]
 
 
-def encode_args(common: Common) -> list[str]:
+def encode_args(common: Common, pix_fmt: str = "yuv420p") -> list[str]:
+    if common.lossless == "hevc":
+        return [
+            "-c:v", "libx265", "-preset", common.preset, "-x265-params", "lossless=1:log-level=error",
+            "-pix_fmt", pix_fmt, "-tag:v", "hvc1", "-movflags", "+faststart",
+        ]
+    if common.lossless == "prores":
+        return [
+            "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", pix_fmt, "-vendor", "apl0",
+            "-movflags", "+faststart",
+        ]
     return [
         "-c:v", "libx264", "-crf", str(common.crf), "-preset", common.preset,
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",

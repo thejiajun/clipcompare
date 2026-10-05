@@ -17,7 +17,7 @@ from pathlib import Path
 from . import __version__, fonts, manifest, media, page
 from . import prompts as prompts_mod
 from .captions import Fonts as CaptionFonts
-from .filters import AUDIO_CHOICES, FITS, IMAGE_EXTENSIONS, LENGTHS, Plan
+from .filters import AUDIO_CHOICES, FITS, IMAGE_EXTENSIONS, LENGTHS, LOSSLESS, LOSSLESS_EXTENSION, Plan
 from .tokens import DS_ACCENT_700, DS_EGGSHELL, DS_FONT_BODY, DS_FONT_DISPLAY, DS_FONT_SANS
 from .modes import grid as grid_mode
 from .modes import pip as pip_mode
@@ -85,9 +85,9 @@ def _labels(args: argparse.Namespace, paths: list[Path]) -> tuple[str, ...] | No
     return tuple(_label_from_path(path) for path in paths)
 
 
-def _default_out(mode: str, paths: list[Path], still: bool = False) -> Path:
+def _default_out(mode: str, paths: list[Path], still: bool = False, lossless: str | None = None) -> Path:
     slug = lambda p: re.sub(r"[^A-Za-z0-9._-]", "-", p.stem)  # noqa: E731
-    ext = ".png" if still else ".mp4"
+    ext = ".png" if still else LOSSLESS_EXTENSION if lossless else ".mp4"
     if mode == "grid":
         return Path(f"{slug(paths[0])}-grid{len(paths)}{ext}")
     suffix = "" if mode == "side" else f"-{mode}"
@@ -113,6 +113,12 @@ def _check_images(mode: str, args: argparse.Namespace, clips: list[ClipInfo], ou
         raise SystemExit(f"clipcompare: {out.name} is an image, but some clips are video or audio; use .mp4")
     if still and getattr(args, "group", 0):
         raise SystemExit("clipcompare: --group joins videos; run once per group to compare images")
+    lossless = getattr(args, "lossless", None)
+    if lossless and not still and out is not None and out.suffix.lower() != LOSSLESS_EXTENSION:
+        raise SystemExit(
+            f"clipcompare: --lossless {lossless} writes a QuickTime movie with PCM sound: "
+            f"name it {out.with_suffix(LOSSLESS_EXTENSION).name}"
+        )
     return still
 
 
@@ -123,7 +129,14 @@ def _add_render_arguments(common: argparse._ArgumentGroup) -> None:
     )
     common.add_argument("--fps", metavar="N", help="force output frame rate")
     common.add_argument("--crf", type=int, default=18, help="x264 quality, default 18")
-    common.add_argument("--preset", default="medium", help="x264 preset, default medium")
+    common.add_argument("--preset", default="medium", help="x264 / x265 preset, default medium")
+    common.add_argument(
+        "--lossless", choices=LOSSLESS, metavar="[hevc|prores]",
+        help="no second generation: every clip at its own pixel size (a larger one is scaled "
+             "with lanczos, and the log says so), no chroma loss, PCM sound, into a .mov. "
+             "hevc (default): bit-exact lossless HEVC that QuickTime plays; "
+             "prores: ProRes 4444, visually lossless, for editing apps",
+    )
     common.add_argument(
         "-n", "--dry-run", action="store_true",
         help="print the ffmpeg command instead of running it",
@@ -400,6 +413,7 @@ def _shared_kwargs(args: argparse.Namespace, out: Path, label_fonts) -> dict:
         "crf": args.crf,
         "preset": args.preset,
         "head": getattr(args, "head", None),
+        "lossless": args.lossless,
     }
 
 
@@ -576,7 +590,7 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             if args.out is None:
                 return 0
 
-    out = args.out or _default_out(mode, names, args._still)
+    out = args.out or _default_out(mode, names, args._still, args.lossless)
     out.parent.mkdir(parents=True, exist_ok=True)
     args._labels = _labels(args, names)
     args._titles = _titles(args, len(paths))
@@ -624,6 +638,8 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             return 0
 
         print(_summary(plan, clips))
+        for note in plan.notes:
+            print(f"[{plan.mode}] {note}")
         for command in plan.pre_commands:
             result = subprocess.run(command)
             if result.returncode != 0:
@@ -676,6 +692,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
+    # A bare --lossless means its default codec; this keeps it from swallowing
+    # the clip that follows it (`grid --lossless a.mp4 b.mp4`).
+    argv = [
+        f"--lossless={LOSSLESS[0]}"
+        if token == "--lossless" and (index + 1 == len(argv) or argv[index + 1] not in LOSSLESS) else token
+        for index, token in enumerate(argv)
+    ]
     parser = _parser()
     args = parser.parse_args(argv)
     if args.command is None:

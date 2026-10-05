@@ -32,9 +32,11 @@ from ..filters import (
     even,
     encode_args,
     ffmpeg_head,
+    frame_chain,
+    lossless_pix_fmt,
     picture,
     resolve_fps,
-    scale_chain,
+    scale_notes,
     write_label_files,
 )
 from ..probe import ClipInfo
@@ -59,8 +61,9 @@ DEFAULT_WIPE_DUR = 0.35
 _EASED = (
     "if(lt(1-P,0.5),(1-sqrt(1-pow(2*(1-P),2)))/2,(sqrt(1-pow(2-2*(1-P),2))+1)/2)"
 )
-# White across the luma and chroma planes.
+# White across the luma and chroma planes, at 8 or 10 bits.
 _WHITE = "if(eq(PLANE,0),255,128)"
+_WHITE_10 = "if(eq(PLANE,0),1023,512)"
 
 
 @dataclass
@@ -92,7 +95,7 @@ def resolve_start(duration: float, pace: str, override: str | None) -> float:
     return min(max(fraction * duration, low), high)
 
 
-def wipe_expression(direction: str, half_stroke: float) -> str:
+def wipe_expression(direction: str, half_stroke: float, white: str = _WHITE) -> str:
     """Paint the stroke within +/- half its width of the boundary, then pick a
     side. `A` is the first xfade input, `B` the second."""
     if direction == "lr":
@@ -104,7 +107,7 @@ def wipe_expression(direction: str, half_stroke: float) -> str:
     else:  # bt
         edge, axis, revealed = f"(H-({_EASED})*H)", "Y", "gt"
     return (
-        f"if(lt(abs({axis}-{edge}),{half_stroke:.2f}),{_WHITE},"
+        f"if(lt(abs({axis}-{edge}),{half_stroke:.2f}),{white},"
         f"if({revealed}({axis},{edge}),B,A))"
     )
 
@@ -112,7 +115,8 @@ def wipe_expression(direction: str, half_stroke: float) -> str:
 def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None) -> Plan:
     out_w, out_h = output_size(a, opts.panel)
     fps, fps_value = resolve_fps(a, b, opts.fps)
-    chain = scale_chain(opts.fit, out_w, out_h, fps)
+    pix_fmt = lossless_pix_fmt([a, b], opts.lossless) if opts.lossless else "yuv420p"
+    chain_a, chain_b = (frame_chain(clip, opts.fit, out_w, out_h, fps, opts.lossless, pix_fmt) for clip in (a, b))
 
     duration = a.duration or b.duration or 3.0
     start = resolve_start(duration, opts.pace, opts.wipe_start)
@@ -120,16 +124,16 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     start = min(start, max(duration - opts.wipe_dur, 0.0))
 
     stroke_px = max(round(opts.stroke * out_h / 1080), 1)
-    expr = wipe_expression(opts.direction, stroke_px / 2.0)
+    expr = wipe_expression(opts.direction, stroke_px / 2.0, _WHITE_10 if "10" in pix_fmt else _WHITE)
 
     wave_a, head_a = picture(0, a, out_w, out_h, fps)
     wave_b, head_b = picture(1, b, out_w, out_h, fps)
     steps = [
         *wave_a,
         *wave_b,
-        f"{head_a}{chain}[va]",
+        f"{head_a}{chain_a}[va]",
         # Pre-trim B so the two sides show the same timestamp during the sweep.
-        f"{head_b}{chain},trim=start={start:.3f},setpts=PTS-STARTPTS[vb]",
+        f"{head_b}{chain_b},trim=start={start:.3f},setpts=PTS-STARTPTS[vb]",
         f"[va][vb]xfade=transition=custom:duration={opts.wipe_dur:.3f}"
         f":offset={start:.3f}:expr='{expr}'[xf]",
     ]
@@ -162,7 +166,7 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     steps.append(f"[{last}]null[v]")
 
     cmd = ffmpeg_head([str(a.path), str(b.path)], ";".join(steps))
-    cmd += audio_args(audio) + encode_args(opts)
+    cmd += audio_args(audio, lossless=opts.lossless) + encode_args(opts, pix_fmt)
     if opts.trim_to:
         cmd += ["-t", f"{opts.trim_to:.3f}"]
     cmd += [str(opts.out)]
@@ -177,6 +181,8 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         detail=(
             f"{opts.direction}, start={start:.2f}s, "
             f"wipe={opts.wipe_dur:.2f}s, stroke={stroke_px}px"
+            + (f", lossless {opts.lossless} {pix_fmt}" if opts.lossless else "")
         ),
         command=cmd,
+        notes=scale_notes([a, b], [(out_w, out_h)] * 2, opts.fit, opts.lossless),
     )

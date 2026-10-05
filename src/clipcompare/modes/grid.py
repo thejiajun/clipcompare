@@ -55,10 +55,13 @@ from ..filters import (
     escape,
     even,
     ffmpeg_head,
+    frame_chain,
     hold_images,
+    lossless_pix_fmt,
+    native_panel,
     picture,
     resolve_fps,
-    scale_chain,
+    scale_notes,
     still_args,
     still_chain,
     wave_band,
@@ -157,11 +160,11 @@ def grid_fps(clips: list[ClipInfo], override: str | None) -> tuple[str, float]:
 
 
 def together_tiles(
-    clips: list[ClipInfo], chain: str, length: str, size: tuple[int, int], fps: str,
+    clips: list[ClipInfo], chains: list[str], length: str, size: tuple[int, int], fps: str,
 ) -> list[str]:
     longest = max(clip.duration for clip in clips)
     steps = []
-    for index, clip in enumerate(clips):
+    for index, (clip, chain) in enumerate(zip(clips, chains)):
         if clip.is_audio:
             # A waveform runs flat to the end rather than freezing mid-swing.
             wave, head = picture(index, clip, *size, fps, total=longest if length == "longest" else 0.0)
@@ -183,7 +186,7 @@ def turn_starts(clips: list[ClipInfo], holds: tuple[float, ...], pause: float, t
 
 
 def sequence_tiles(
-    clips: list[ClipInfo], chain: str, opts: Options, holds: tuple[float, ...], fps_value: float,
+    clips: list[ClipInfo], chains: list[str], opts: Options, holds: tuple[float, ...], fps_value: float,
     size: tuple[int, int], fps: str,
 ) -> tuple[list[str], list[Input], list[tuple[float, float]]]:
     """Per-tile video for --sequential, the extra still inputs it reads, and each
@@ -195,7 +198,7 @@ def sequence_tiles(
 
     steps: list[str] = []
     stills: list[Input] = []
-    for index, (clip, hold) in enumerate(zip(clips, holds)):
+    for index, (clip, hold, chain) in enumerate(zip(clips, holds, chains)):
         if clip.is_audio:
             # No still needed: the line is flat before and after its own turn.
             wave, head = picture(index, clip, *size, fps, delay=starts[index], total=total)
@@ -227,6 +230,7 @@ def grid_audio(
     choice = opts.audio
     if choice == "none" or not with_sound:
         return "none", [], audio_args("none")
+    lossless = opts.lossless
 
     if opts.sequential and choice == "auto":
         steps = []
@@ -241,13 +245,13 @@ def grid_audio(
             steps.append(f"{source}atrim={hold:.3f}:{clip.duration + gap:.3f},asetpts=N/SR/TB[s{index}]")
         turns = "".join(f"[s{index}]" for index in range(len(clips)))
         steps.append(f"{turns}concat=n={len(clips)}:v=0:a=1[aout]")
-        return "follow", steps, audio_args("both")
+        return "follow", steps, audio_args("both", lossless=lossless)
 
     if choice == "mix" and len(with_sound) > 1:
         sources = "".join(f"[{index}:a]" for index in with_sound)
         duration = "longest" if opts.length == "longest" or opts.sequential else "shortest"
         steps = [f"{sources}amix=inputs={len(with_sound)}:duration={duration}[aout]"]
-        return "mix", steps, audio_args("both")
+        return "mix", steps, audio_args("both", lossless=lossless)
 
     if choice in ("auto", "mix"):
         index = with_sound[0]
@@ -255,14 +259,15 @@ def grid_audio(
         index = int(choice) - 1
         if index not in with_sound:
             return "none", [], audio_args("none")
-    return str(index + 1), [], audio_args("a", index_a=index)
+    return str(index + 1), [], audio_args("a", index_a=index, lossless=lossless)
 
 
 def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -> Plan:
     # Every clip a still image: the result is one picture, not a video.
     still = all(clip.is_image for clip in clips)
     if still:
-        opts = replace(opts, sequential=False, holds=(), pause=0.0, tail=0.0, head=None)
+        # A picture of stills is a lossless PNG already.
+        opts = replace(opts, sequential=False, holds=(), pause=0.0, tail=0.0, head=None, lossless=None)
     else:
         clips = hold_images([clamp_head(clip, opts.head) for clip in clips])
     count = len(clips)
@@ -278,7 +283,9 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     else:
         # Stills keep their own pixels: the auto size never scales them up.
         cap = min(MAX_TILE, first.width, first.height) if still else MAX_TILE
-        tile_w, tile_h, short, gap = tile_size(first, cols, rows, opts.panel, opts.gap, cap)
+        # --lossless tiles are the first clip's own size, however large the canvas.
+        panel = opts.panel or (native_panel(first) if opts.lossless else 0)
+        tile_w, tile_h, short, gap = tile_size(first, cols, rows, panel, opts.gap, cap)
     grid_w = cols * tile_w + (cols - 1) * gap
     grid_h = rows * tile_h + (rows - 1) * gap
     header = 0
@@ -290,17 +297,22 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     spots = [(x, y + header) for x, y in cells]
 
     fps, fps_value = grid_fps(clips, opts.fps)
-    chain = still_chain(opts.fit, tile_w, tile_h) if still else scale_chain(opts.fit, tile_w, tile_h, fps)
+    pix_fmt = lossless_pix_fmt(clips, opts.lossless) if opts.lossless else "yuv420p"
+    chains = [
+        still_chain(opts.fit, tile_w, tile_h) if still
+        else frame_chain(clip, opts.fit, tile_w, tile_h, fps, opts.lossless, pix_fmt)
+        for clip in clips
+    ]
     inputs: list[Input] = [clip_input(clip, opts.head) for clip in clips]
     holds = opts.holds or (0.0,) * count
 
     turns: list[tuple[float, float]] = []
     if opts.sequential:
-        steps, stills, turns = sequence_tiles(clips, chain, opts, holds, fps_value, (tile_w, tile_h), fps)
+        steps, stills, turns = sequence_tiles(clips, chains, opts, holds, fps_value, (tile_w, tile_h), fps)
         inputs += stills
         shortest = 0
     else:
-        steps = together_tiles(clips, chain, opts.length, (tile_w, tile_h), fps)
+        steps = together_tiles(clips, chains, opts.length, (tile_w, tile_h), fps)
         shortest = 1 if opts.length == "shortest" and not still else 0
 
     layout = "|".join(f"{x}_{y}" for x, y in cells)
@@ -362,7 +374,7 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         audio, audio_steps, output = "none", [], still_args(opts.out)
     else:
         audio, audio_steps, audio_map = grid_audio(clips, opts, holds)
-        output = audio_map + encode_args(opts)
+        output = audio_map + encode_args(opts, pix_fmt)
     steps += audio_steps
     steps.append(f"[{last}]null[v]")
 
@@ -379,10 +391,12 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         fps_value=fps_value,
         audio=audio,
         detail=f"{cols}x{rows}, {opts.fit}, "
-               f"{'image' if still else 'sequential' if opts.sequential else opts.length}",
+               f"{'image' if still else 'sequential' if opts.sequential else opts.length}"
+               + (f", lossless {opts.lossless} {pix_fmt}" if opts.lossless else ""),
         command=cmd,
         pre_commands=pre_commands,
         caption_size=caption_size,
+        notes=scale_notes(clips, [(tile_w, tile_h)] * count, opts.fit, opts.lossless),
     )
 
 
@@ -466,8 +480,10 @@ def prompt_steps(
                 steps.append(f"[{last}][{source}:v]overlay={x + left}:{y + top}:format=rgb[p{index}_{number}]")
             else:
                 inputs.append((["-loop", "1", "-framerate", fps], str(image)))
+                # format=auto keeps a --lossless 4:4:4 picture from dropping to 4:2:0.
                 steps.append(
                     f"[{last}][{source}:v]overlay={x + left}:{y + top}:shortest=1"
+                    f"{':format=auto' if opts.lossless else ''}"
                     f":enable='between(t,{start:.3f},{end:.3f})'[p{index}_{number}]"
                 )
             last = f"p{index}_{number}"
@@ -501,6 +517,7 @@ def build_groups(
         fps_value=first.fps_value,
         audio=first.audio,
         detail=f"{len(groups)} groups of {size}, {first.detail}",
+        notes=[note for plan in parts for note in plan.notes],
         command=[
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "concat", "-safe", "0", "-i", str(listing),
@@ -522,7 +539,7 @@ def _build_runs(
         span = slice(number * size, (number + 1) * size)
         part = replace(
             opts,
-            out=part_dir / "part.mp4",
+            out=part_dir / f"part{opts.out.suffix or '.mp4'}",
             # One rate for every run, or the copied join would play them at odd speeds.
             fps=opts.fps or grid_fps([clip for run in groups for clip in run], None)[0],
             labels=opts.labels[span] if opts.labels else None,

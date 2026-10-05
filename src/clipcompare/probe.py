@@ -44,6 +44,7 @@ class ClipInfo:
     has_audio: bool
     has_video: bool = True  # False: audio only (mp3, wav, ...), drawn as a waveform
     still: bool = False     # True: a still image, held for as long as its neighbours play
+    pix_fmt: str = ""       # the picture's pixel format as ffprobe names it, e.g. "yuv420p"
 
     @property
     def is_audio(self) -> bool:
@@ -167,7 +168,7 @@ def probe(path: Path) -> ClipInfo:
         # A still's 25/1 "rate" is the demuxer's default, not the picture's.
         return ClipInfo(
             path=path, width=width, height=height, fps=AUDIO_FPS, fps_value=float(AUDIO_FPS),
-            duration=0.0, has_audio=False, still=True,
+            duration=0.0, has_audio=False, still=True, pix_fmt=str(video.get("pix_fmt") or ""),
         )
 
     return ClipInfo(
@@ -178,6 +179,7 @@ def probe(path: Path) -> ClipInfo:
         fps_value=fps_value,
         duration=_duration(data, [video, *(s for s in streams if s.get("codec_type") == "audio")]),
         has_audio=has_audio,
+        pix_fmt=str(video.get("pix_fmt") or ""),
     )
 
 

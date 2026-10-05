@@ -17,11 +17,14 @@ from ..filters import (
     even,
     ffmpeg_head,
     encode_args,
+    frame_chain,
     freeze_pads,
     hold_images,
+    lossless_pix_fmt,
+    native_panel,
     picture,
     resolve_fps,
-    scale_chain,
+    scale_notes,
     still_args,
     still_chain,
     write_label_files,
@@ -42,7 +45,7 @@ class Options(Common):
 
 
 def sequence_video(
-    a: ClipInfo, b: ClipInfo, chain: str, hold_b_at: float, fps_value: float,
+    a: ClipInfo, b: ClipInfo, chains: tuple[str, str], hold_b_at: float, fps_value: float,
     size: tuple[int, int], fps: str,
 ) -> list[str]:
     """--sequential: A holds its last frame while B plays; while A plays, B shows
@@ -57,19 +60,20 @@ def sequence_video(
     hold = max(a.duration - frame, 0.0)
     b_turn = b.duration - hold_b_at
     width, height = size
+    chain_a, chain_b = chains
     steps: list[str] = []
     if a.is_audio:
         wave, head = picture(0, a, width, height, fps, total=hold + b_turn)
-        steps += [*wave, f"{head}{chain}[va]"]
+        steps += [*wave, f"{head}{chain_a}[va]"]
     else:
-        steps.append(f"[0:v]{chain},tpad=stop_mode=clone:stop_duration={b_turn:.3f}[va]")
+        steps.append(f"[0:v]{chain_a},tpad=stop_mode=clone:stop_duration={b_turn:.3f}[va]")
     if b.is_audio:
         wave, head = picture(1, b, width, height, fps, delay=hold)
-        steps += [*wave, f"{head}{chain}[vb]"]
+        steps += [*wave, f"{head}{chain_b}[vb]"]
     else:
         steps += [
-            f"[2:v]{chain},trim=end_frame=1,tpad=stop_mode=clone:stop_duration={hold:.3f}[bh]",
-            f"[1:v]{chain},trim=start={hold_b_at:.3f},setpts=PTS-STARTPTS[bp]",
+            f"[2:v]{chain_b},trim=end_frame=1,tpad=stop_mode=clone:stop_duration={hold:.3f}[bh]",
+            f"[1:v]{chain_b},trim=start={hold_b_at:.3f},setpts=PTS-STARTPTS[bp]",
             "[bh][bp]concat=n=2:v=1:a=0[vb]",
         ]
     return steps
@@ -115,8 +119,13 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         opts = replace(opts, sequential=False, head=None)
     else:
         a, b = hold_images([clamp_head(a, opts.head), clamp_head(b, opts.head)])
-    # Stills keep their own pixels unless --panel says otherwise.
-    panel = opts.panel or (min(1080, a.width, a.height) if still else 1080)
+    # Stills keep their own pixels unless --panel says otherwise; so does
+    # --lossless, at the first clip's own size.
+    if still:
+        opts = replace(opts, lossless=None)
+    panel = opts.panel or (
+        min(1080, a.width, a.height) if still else native_panel(a) if opts.lossless else 1080
+    )
     opts = replace(opts, panel=panel)
     layout = resolve_layout(a, opts.layout)
     panel_w, panel_h = panel_size(a, opts.panel)
@@ -126,11 +135,15 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         out_w, out_h, stack = panel_w, panel_h * 2, "vstack"
 
     fps, fps_value = resolve_fps(a, b, opts.fps)
-    chain = still_chain(opts.fit, panel_w, panel_h) if still else scale_chain(opts.fit, panel_w, panel_h, fps)
+    pix_fmt = lossless_pix_fmt([a, b], opts.lossless) if opts.lossless else "yuv420p"
+    if still:
+        chains = (still_chain(opts.fit, panel_w, panel_h),) * 2
+    else:
+        chains = tuple(frame_chain(clip, opts.fit, panel_w, panel_h, fps, opts.lossless, pix_fmt) for clip in (a, b))
 
     inputs = [clip_input(a, opts.head), clip_input(b, opts.head)]
     if opts.sequential:
-        steps = sequence_video(a, b, chain, opts.hold_b_at, fps_value, (panel_w, panel_h), fps)
+        steps = sequence_video(a, b, chains, opts.hold_b_at, fps_value, (panel_w, panel_h), fps)
         if not b.is_audio:
             inputs.append((["-ss", f"{opts.hold_b_at:.3f}"], str(b.path)))
         shortest = 0
@@ -146,7 +159,7 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         steps = []
         for index, (clip, pad, name) in enumerate(((a, pad_a, "va"), (b, pad_b, "vb"))):
             wave, head = picture(index, clip, panel_w, panel_h, fps, total=longest)
-            steps += [*wave, f"{head}{chain}{'' if clip.is_audio else pad}[{name}]"]
+            steps += [*wave, f"{head}{chains[index]}{'' if clip.is_audio else pad}[{name}]"]
     steps.append(f"[va][vb]{stack}=inputs=2:shortest={shortest}[st]")
     last = "st"
 
@@ -198,7 +211,7 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     if still:
         cmd += still_args(opts.out)
     else:
-        cmd += audio_args("both" if audio == "a→b" else audio) + encode_args(opts)
+        cmd += audio_args("both" if audio == "a→b" else audio, lossless=opts.lossless) + encode_args(opts, pix_fmt)
     if opts.length == "shortest" and not opts.sequential and not still:
         cmd += ["-shortest"]
     cmd += [str(opts.out)]
@@ -210,6 +223,8 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         fps=fps,
         fps_value=fps_value,
         audio=audio,
-        detail=f"{layout}, {opts.fit}, {'image' if still else 'sequential' if opts.sequential else opts.length}",
+        detail=f"{layout}, {opts.fit}, {'image' if still else 'sequential' if opts.sequential else opts.length}"
+               + (f", lossless {opts.lossless} {pix_fmt}" if opts.lossless else ""),
         command=cmd,
+        notes=scale_notes([a, b], [(panel_w, panel_h)] * 2, opts.fit, opts.lossless),
     )

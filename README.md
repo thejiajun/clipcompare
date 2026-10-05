@@ -55,6 +55,30 @@ clipcompare grid c1.png c2.png c3.png -o compare.png \
   --title "Yuna b01 · forehead crop 2x"
 ```
 
+## 不再压一遍画质（`--lossless`）
+
+对比视频本身默认也要重新编码一次（x264 crf 18），比 13 Mbps 和 5.1 Mbps 这种「画质差在哪」的时候，看到的是第二代画面，细微差别会被这一遍压缩盖掉。`--lossless` 让每段片段的像素原样进到成片里：
+
+```bash
+clipcompare side raw.mp4 fit.mp4 --lossless            # 默认 hevc：数学无损，QuickTime 能放
+clipcompare grid a.mp4 b.mp4 c.mp4 --lossless prores   # ProRes 4444：剪辑软件里用
+```
+
+- **不缩放**：画面块按第一段素材**自己的尺寸**来（`side` / `grid` 的默认 `--panel` 变成它的短边，不再是 1080，也不受 4K 画布上限约束）。尺寸一样的片段原样放；比画面块小的原尺寸居中、四周补黑，不放大；奇数尺寸裁掉一个像素。只有比画面块大的片段才会缩小，用 lanczos，并在输出里写一行 `lossless: clip 2 (1080x1920) … scaled (lanczos)`。`pip` 的小窗必然要缩，同样用 lanczos 并注明；全屏那段保持原像素。
+- **不降色度**：输出的像素格式取所有片段里最宽的那个（都是 yuv420p 就是 yuv420p，有 4:4:4 / 10-bit / 图片就升到 4:4:4 / 10-bit），不会把 4:4:4 降成 4:2:0。
+- **声音**：24-bit PCM，不再转 AAC。
+- **输出**：一律 `.mov`；`-o` 写了别的后缀会直接报错。全是图片时照旧出 PNG（本来就无损）。
+- 标签、分隔线、提示词仍然画在画面上，盖住的那几个像素当然会变；要逐像素比对可以加 `--no-labels --divider 0`。
+
+编码器怎么选的（标准：macOS QuickTime / Finder 预览能放，且片段像素真无损）：
+
+| 选项 | 无损程度 | QuickTime / Finder | 说明 |
+|------|------|------|------|
+| **`hevc`（默认）** — x265 `lossless=1` | 数学无损（实测 PSNR inf、SSIM 1.000000，168 帧逐帧 md5 一致） | 能放（8-bit 4:2:0 就是普通 HEVC Main） | 文件大：两段 720p 5.6 秒约 90 MB |
+| `prores` — ProRes 4444 | 视觉无损（实测 PSNR 55.5–56.2 dB、SSIM 0.998） | 能放 | 剪辑软件友好，文件更大（约 210 MB），编码最快 |
+| x264 `-qp 0`（未采用） | 数学无损 | 本机能放，但它是 High 4:4:4 Predictive，旧版 macOS、iOS 和浏览器普遍放不了 | |
+| FFV1（未采用） | 数学无损 | 放不了 | |
+
 ## 提示词对比（manifest）
 
 对比 TTS / 生成模型的不同版本时，真正想看的是「提示词改了什么、听起来差在哪」。把片段、标签、提示词、组名写进一个 JSON，一条命令出整段对比视频，外加一个可以来回切换版本的网页：
@@ -162,7 +186,8 @@ brew install ffmpeg
 | `--fit cover\|contain` | `cover` 裁切填满（默认）；`contain` 留黑边保留完整画面 |
 | `--audio a\|b\|both\|none` | 默认 `b`；`both` 混音；某段没音轨时自动退回有音轨的那段 |
 | `--fps N` | 强制输出帧率，默认对齐到两段里较高的那个 |
-| `--crf N` / `--preset NAME` | x264 画质档位，默认 `18` / `medium` |
+| `--crf N` / `--preset NAME` | x264 画质档位，默认 `18` / `medium`（`--preset` 也用于 `--lossless hevc`） |
+| `--lossless [hevc\|prores]` | 不重新压缩画质、不缩放片段，输出 `.mov` + PCM 声音，见「不再压一遍画质」 |
 | `-n, --dry-run` | 只打印 ffmpeg 命令（打印出来的可以直接粘贴执行） |
 | `--open` | 渲染完直接打开（macOS） |
 
