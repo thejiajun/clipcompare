@@ -16,6 +16,11 @@ canvas; in a sequence each line moves only during its own turn.
 
 --title puts a header strip above the tiles (it never crosses a tile).
 
+Still images (png, jpg, webp) among the clips hold still for the video's
+length. When every clip is an image the result is one picture instead: up to
+four in a row, at their own size, in full-colour RGB, with each prompt drawn
+whole and static.
+
 Prompts (--captions, or a --manifest's "prompt"s) are drawn inside the tiles,
 marked against the run's baseline clip (see prompts.py): every tile shows its
 label and a one-line summary of how it differs, and the playing tile also
@@ -50,9 +55,12 @@ from ..filters import (
     escape,
     even,
     ffmpeg_head,
+    hold_images,
     picture,
     resolve_fps,
     scale_chain,
+    still_args,
+    still_chain,
     wave_band,
 )
 from ..probe import ClipInfo, ProbeError
@@ -64,6 +72,7 @@ MAX_TILE = 1080          # ...and never grows a tile past 1080 on its short edge
 TARGET_ASPECT = 16 / 9   # the auto shape aims the whole canvas at a landscape screen
 AUDIO_CANVAS = (1920, 1080)  # what auto tiles fill when every clip is audio only
 AUDIO_ROW = 4                # ...and up to this many of them sit in one row
+IMAGE_ROW = 4                # images too: up to this many sit side by side in one row
 AUDIO_MODES = ("auto", "none", "mix")
 HEADER = 0.1             # --title strip height, as a share of the canvas's short edge
 SUMMARY = 0.8            # diff summary size, as a share of the label's
@@ -120,14 +129,16 @@ def gap_px(gap: int, short: int) -> int:
     return max(even(round(gap * short / 1080)), 2) if gap > 0 else 0
 
 
-def tile_size(first: ClipInfo, cols: int, rows: int, panel: int, gap: int = 0) -> tuple[int, int, int, int]:
+def tile_size(
+    first: ClipInfo, cols: int, rows: int, panel: int, gap: int = 0, max_tile: int = MAX_TILE,
+) -> tuple[int, int, int, int]:
     """(tile width, tile height, tile short edge, gap in px). The auto size
     shrinks until tiles and gaps together fit MAX_CANVAS."""
     auto = panel == 0
     if auto:
         unit_w, unit_h = panel_size(first, 1000)
         long_units = max(cols * unit_w, rows * unit_h) / 1000
-        panel = min(MAX_TILE, int(MAX_CANVAS / long_units))
+        panel = min(max_tile, int(MAX_CANVAS / long_units))
     while True:
         width, height = panel_size(first, panel)
         short = min(width, height)
@@ -248,11 +259,16 @@ def grid_audio(
 
 
 def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -> Plan:
-    clips = [clamp_head(clip, opts.head) for clip in clips]
+    # Every clip a still image: the result is one picture, not a video.
+    still = all(clip.is_image for clip in clips)
+    if still:
+        opts = replace(opts, sequential=False, holds=(), pause=0.0, tail=0.0, head=None)
+    else:
+        clips = hold_images([clamp_head(clip, opts.head) for clip in clips])
     count = len(clips)
     first = clips[0]
     all_audio = all(clip.is_audio for clip in clips)
-    if all_audio and not (opts.cols or opts.rows) and count <= AUDIO_ROW:
+    if (all_audio and count <= AUDIO_ROW or still and count <= IMAGE_ROW) and not (opts.cols or opts.rows):
         cols, rows = count, 1
     else:
         cols, rows = grid_shape(count, first.width / first.height, opts.cols, opts.rows)
@@ -260,7 +276,9 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     if all_audio and not opts.panel:
         tile_w, tile_h, short, gap = audio_tiles(cols, rows, opts.gap, titled)
     else:
-        tile_w, tile_h, short, gap = tile_size(first, cols, rows, opts.panel, opts.gap)
+        # Stills keep their own pixels: the auto size never scales them up.
+        cap = min(MAX_TILE, first.width, first.height) if still else MAX_TILE
+        tile_w, tile_h, short, gap = tile_size(first, cols, rows, opts.panel, opts.gap, cap)
     grid_w = cols * tile_w + (cols - 1) * gap
     grid_h = rows * tile_h + (rows - 1) * gap
     header = 0
@@ -272,7 +290,7 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     spots = [(x, y + header) for x, y in cells]
 
     fps, fps_value = grid_fps(clips, opts.fps)
-    chain = scale_chain(opts.fit, tile_w, tile_h, fps)
+    chain = still_chain(opts.fit, tile_w, tile_h) if still else scale_chain(opts.fit, tile_w, tile_h, fps)
     inputs: list[Input] = [clip_input(clip, opts.head) for clip in clips]
     holds = opts.holds or (0.0,) * count
 
@@ -283,7 +301,7 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         shortest = 0
     else:
         steps = together_tiles(clips, chain, opts.length, (tile_w, tile_h), fps)
-        shortest = 1 if opts.length == "shortest" else 0
+        shortest = 1 if opts.length == "shortest" and not still else 0
 
     layout = "|".join(f"{x}_{y}" for x, y in cells)
     tiles = "".join(f"[t{index}]" for index in range(count))
@@ -312,7 +330,7 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
             clips, opts, label_dir, spots, (tile_w, tile_h), metrics,
             min(out_w, AUDIO_CANVAS[1] if all_audio else out_h) / 1080,
             turns or [(0.0, clip.duration) for clip in clips], holds, fps,
-            steps, inputs, pre_commands, last,
+            steps, inputs, pre_commands, last, still,
         )
 
     if opts.labels and label_dir is not None:
@@ -340,11 +358,15 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         )
         last = "tv"
 
-    audio, audio_steps, audio_map = grid_audio(clips, opts, holds)
+    if still:
+        audio, audio_steps, output = "none", [], still_args(opts.out)
+    else:
+        audio, audio_steps, audio_map = grid_audio(clips, opts, holds)
+        output = audio_map + encode_args(opts)
     steps += audio_steps
     steps.append(f"[{last}]null[v]")
 
-    cmd = ffmpeg_head(inputs, ";".join(steps)) + audio_map + encode_args(opts)
+    cmd = ffmpeg_head(inputs, ";".join(steps)) + output
     if shortest:
         cmd += ["-shortest"]
     cmd += [str(opts.out)]
@@ -356,7 +378,8 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         fps=fps,
         fps_value=fps_value,
         audio=audio,
-        detail=f"{cols}x{rows}, {opts.fit}, {'sequential' if opts.sequential else opts.length}",
+        detail=f"{cols}x{rows}, {opts.fit}, "
+               f"{'image' if still else 'sequential' if opts.sequential else opts.length}",
         command=cmd,
         pre_commands=pre_commands,
         caption_size=caption_size,
@@ -379,15 +402,27 @@ def prompt_steps(
     clips: list[ClipInfo], opts: Options, label_dir: Path, spots: list[tuple[int, int]],
     tile: tuple[int, int], metrics: LabelMetrics, scale: float, turns: list[tuple[float, float]],
     holds: tuple[float, ...], fps: str, steps: list[str], inputs: list[Input],
-    pre_commands: list[list[str]], last: str,
+    pre_commands: list[list[str]], last: str, still: bool = False,
 ) -> tuple[str, int]:
     """Each tile's diff summary under its label, and while it plays, one PNG
     per prompt segment (a pre-command each), shown during that segment's
-    span. Returns the new last label and the prompt size used."""
+    span. In a still picture each tile shows its whole prompt at once.
+    Returns the new last label and the prompt size used."""
     fonts = opts.caption_fonts
     assert fonts is not None
     tile_w, tile_h = tile
     regions = [prompt_region(tile_w, tile_h, metrics, clip.is_audio) for clip in clips]
+    if still:
+        # One untimed segment per prompt: nothing plays, so nothing steps through.
+        opts = replace(opts, prompts=tuple(
+            replace(
+                prompt,
+                segments=(prompts_mod.Segment(prompt.text),),
+                marked=(tuple(token for segment in prompt.marked for token in segment),),
+            ) if prompt else None
+            for prompt in opts.prompts
+        ))
+        turns = [(0.0, 1.0)] * len(clips)
     size = opts.caption_size or captions_mod.fit(
         [list(segment) for prompt in opts.prompts if prompt for segment in prompt.marked],
         min(region[3] for region in regions), min(region[4] for region in regions), fonts, scale,
@@ -417,17 +452,24 @@ def prompt_steps(
             if end - start <= 0:
                 continue
             shown = captions_mod.view(segments, number, width, height, size, fonts, note=segment.estimated)
+            if still:
+                # Nothing plays over a still, so the chip hugs the text and leaves the picture.
+                height = min(height, len(shown.rows) * captions_mod.line_height(size))
             image = label_dir / f"prompt-{index}-{number}.png"
             pre_commands.append(captions_mod.render_command(
                 shown, fonts, image, label_dir, width, height,
                 background="black@0" if clip.is_audio else opts.label_bg, pad=pad,
             ))
             source = len(inputs)
-            inputs.append((["-loop", "1", "-framerate", fps], str(image)))
-            steps.append(
-                f"[{last}][{source}:v]overlay={x + left}:{y + top}:shortest=1"
-                f":enable='between(t,{start:.3f},{end:.3f})'[p{index}_{number}]"
-            )
+            if still:
+                inputs.append(str(image))
+                steps.append(f"[{last}][{source}:v]overlay={x + left}:{y + top}:format=rgb[p{index}_{number}]")
+            else:
+                inputs.append((["-loop", "1", "-framerate", fps], str(image)))
+                steps.append(
+                    f"[{last}][{source}:v]overlay={x + left}:{y + top}:shortest=1"
+                    f":enable='between(t,{start:.3f},{end:.3f})'[p{index}_{number}]"
+                )
             last = f"p{index}_{number}"
     if summaries:
         steps.append(f"[{last}]{','.join(summaries)}[sm]")

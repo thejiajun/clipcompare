@@ -37,6 +37,24 @@ sbs grid kali-v3.mp3 kali-v4.mp3 alia-v3.mp3 alia-v4.mp3 ... \
   --sequential --group 2 -l "Eleven v3,Eleven v4" --title "Kali,Alia,..."
 ```
 
+## 图片
+
+`side` 和 `grid` 也吃 png / jpg / webp 静态图。**全是图片时出一张图**（默认 `.png`，`-o` 写 `.jpg` / `.webp` 就出对应格式），版式和视频一样：标题条、标签、设计系统配色和 Telka 字体、格子间的缝都在。
+
+- 四张以内默认排成一行；`--cols` / `--rows` 照样能改。
+- 图片按原尺寸放，不会被自动放大（单格短边上限仍是 1080）；要放大用 `--panel`。
+- 颜色按全彩 RGB 输出，不像视频那样降到 yuv420p，细节对比不失真。
+- 提示词（`--captions` 或 manifest 的 `prompt`）显示为格子里的静态文字：整段一次显示，底色只盖住文字那几行。
+- 图片和视频 / 音频混在一起时，图片在整段视频时长内保持不动；`--sequential` 时它也有自己的一轮。
+- `--sequential`、`--pause`、`--head`、`--audio` 对纯图片不起作用；`--group`、`--html`、`wipe`、`pip` 不支持图片，会直接报错说明。
+
+```bash
+# 三张截图拼一行，顶部写标题
+sbs grid c1.png c2.png c3.png -o compare.png \
+  -l "Kling original · 13.0 Mbps,Old fit crf 18 · 5.1 Mbps,New fit copy · 13.0 Mbps" \
+  --title "Yuna b01 · forehead crop 2x"
+```
+
 ## 提示词对比（manifest）
 
 对比 TTS / 生成模型的不同版本时，真正想看的是「提示词改了什么、听起来差在哪」。把片段、标签、提示词、组名写进一个 JSON，一条命令出整段对比视频，外加一个可以来回切换版本的网页：
@@ -155,7 +173,7 @@ brew install ffmpeg
 | 参数 | 说明 |
 |------|------|
 | `--layout auto\|lr\|tb` | 默认 auto：竖版/方形左右并排，横版上下堆叠 |
-| `--panel PX` | 每块画面的**短边**，默认 1080 —— 竖版出 2160×1920，横版出 1920×2160 |
+| `--panel PX` | 每块画面的**短边**，默认 1080 —— 竖版出 2160×1920，横版出 1920×2160；两张图片时默认用图片自己的短边（最多 1080） |
 | `--length shortest\|longest` | `longest` 把较短那段的最后一帧冻住补齐 |
 | `--divider PX` | 中缝分隔线粗细，默认 4，`0` 关闭。线是叠加绘制的，输出尺寸不变，调粗会盖住两侧画面各一半线宽 |
 | `--head SEC` | 每段只取前 SEC 秒：同时播放时成片就是前 SEC 秒；配合 `--sequential` 时每段轮到时只播前 SEC 秒 |
@@ -195,7 +213,7 @@ brew install ffmpeg
 
 | 参数 | 说明 |
 |------|------|
-| `--cols N` / `--rows M` | 列数 / 行数。都不写时自动：让整张画面接近 16:9，再去掉多余的空列；只写一个时另一个自动补齐 |
+| `--cols N` / `--rows M` | 列数 / 行数。都不写时自动：让整张画面接近 16:9，再去掉多余的空列（全是图片或音频时四段以内排一行）；只写一个时另一个自动补齐 |
 | `--panel PX` | 每格的**短边**。默认自动：整张画面长边不超过 3840，单格短边不超过 1080 |
 | `--gap PX` | 格子之间的黑缝，1080p 下的像素，默认 4，`0` 无缝。没铺满的空格也填黑 |
 | `--length shortest\|longest` | 同时播放时：`shortest` 按最短那段截；`longest` 让短的冻住最后一帧 |
@@ -322,7 +340,7 @@ uv tool install --force .
 
 构建后端是 hatchling，它不产生增量的 `build/` 目录 —— setuptools 的那个会把源码里已删除的文件继续打进 wheel。改完代码若发现装进去的还是旧的，用 `uv tool install --reinstall .`，`--force` 在版本号不变时会复用缓存的 wheel。
 
-每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试，180 多个测试跑完不到半秒（网页里的换算逻辑用 node 跑，没装 node 时跳过）。
+每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试，200 多个测试跑完不到半秒（网页里的换算逻辑用 node 跑，没装 node 时跳过）。
 
 ## 已知边界
 

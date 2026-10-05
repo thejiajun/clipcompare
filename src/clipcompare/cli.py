@@ -17,7 +17,7 @@ from pathlib import Path
 from . import __version__, fonts, manifest, media, page
 from . import prompts as prompts_mod
 from .captions import Fonts as CaptionFonts
-from .filters import AUDIO_CHOICES, FITS, LENGTHS, Plan
+from .filters import AUDIO_CHOICES, FITS, IMAGE_EXTENSIONS, LENGTHS, Plan
 from .tokens import DS_ACCENT_700, DS_EGGSHELL, DS_FONT_BODY, DS_FONT_DISPLAY, DS_FONT_SANS
 from .modes import grid as grid_mode
 from .modes import pip as pip_mode
@@ -85,12 +85,35 @@ def _labels(args: argparse.Namespace, paths: list[Path]) -> tuple[str, ...] | No
     return tuple(_label_from_path(path) for path in paths)
 
 
-def _default_out(mode: str, paths: list[Path]) -> Path:
+def _default_out(mode: str, paths: list[Path], still: bool = False) -> Path:
     slug = lambda p: re.sub(r"[^A-Za-z0-9._-]", "-", p.stem)  # noqa: E731
+    ext = ".png" if still else ".mp4"
     if mode == "grid":
-        return Path(f"{slug(paths[0])}-grid{len(paths)}.mp4")
+        return Path(f"{slug(paths[0])}-grid{len(paths)}{ext}")
     suffix = "" if mode == "side" else f"-{mode}"
-    return Path(f"{slug(paths[0])}-vs-{slug(paths[1])}{suffix}.mp4")
+    return Path(f"{slug(paths[0])}-vs-{slug(paths[1])}{suffix}{ext}")
+
+
+def _check_images(mode: str, args: argparse.Namespace, clips: list[ClipInfo], out: Path | None) -> bool:
+    """Whether the result is a still picture (every clip an image), after
+    checking the output extension and mode can make what was asked for."""
+    images = [clip for clip in clips if clip.is_image]
+    if images and getattr(args, "html", None) is not None:
+        raise SystemExit("clipcompare: --html plays videos and audio; images are not supported there")
+    if images and mode in ("wipe", "pip"):
+        raise SystemExit(f"clipcompare: {mode} needs two videos; use side or grid for images")
+    still = len(images) == len(clips)
+    image_out = out is not None and out.suffix.lower() in IMAGE_EXTENSIONS
+    if still and out is not None and not image_out:
+        raise SystemExit(
+            f"clipcompare: every clip is an image, so the result is a picture: "
+            f"name it {out.with_suffix('.png').name} (or .jpg / .webp)"
+        )
+    if image_out and not still:
+        raise SystemExit(f"clipcompare: {out.name} is an image, but some clips are video or audio; use .mp4")
+    if still and getattr(args, "group", 0):
+        raise SystemExit("clipcompare: --group joins videos; run once per group to compare images")
+    return still
 
 
 def _add_render_arguments(common: argparse._ArgumentGroup) -> None:
@@ -263,7 +286,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--panel", type=int, default=0, metavar="PX",
-        help="short edge of each panel, default 1080 (use 2160 for 4K)",
+        help="short edge of each panel, default 1080 (two images: their own size, at most 1080; "
+             "use 2160 for 4K)",
     )
     group.add_argument(
         "--length", choices=LENGTHS, default="shortest",
@@ -382,8 +406,8 @@ def _shared_kwargs(args: argparse.Namespace, out: Path, label_fonts) -> dict:
 
 
 def _hold(clip: ClipInfo) -> float:
-    """Where a clip's picture starts: past any black lead-in. Audio has none."""
-    return 0.0 if clip.is_audio else lead_in_black(clip.path)
+    """Where a clip's picture starts: past any black lead-in. Audio and images have none."""
+    return 0.0 if clip.is_audio or clip.is_image else lead_in_black(clip.path)
 
 
 def _titles(args: argparse.Namespace, count: int) -> tuple[str | None, ...]:
@@ -403,7 +427,7 @@ def _make_plan(mode: str, args, clips: list[ClipInfo], out, label_fonts, label_d
         opts = grid_mode.Options(
             **shared, cols=args.cols, rows=args.rows, panel=args.panel, gap=args.gap,
             length=args.length, sequential=args.sequential, pause=args.pause if args.sequential else 0.0,
-            holds=tuple(_hold(clip) for clip in clips) if args.sequential else (),
+            holds=tuple(_hold(clip) for clip in clips) if args.sequential and not args._still else (),
             title_font=args._title_font,
             prompts=args._prompts, caption_fonts=args._caption_fonts,
         )
@@ -417,7 +441,7 @@ def _make_plan(mode: str, args, clips: list[ClipInfo], out, label_fonts, label_d
         opts = sidebyside.Options(
             **shared, layout=args.layout, panel=args.panel,
             length=args.length, divider=args.divider, sequential=args.sequential,
-            hold_b_at=_hold(b) if args.sequential else 0.0,
+            hold_b_at=_hold(b) if args.sequential and not args._still else 0.0,
         )
         return sidebyside.build(a, b, opts, label_dir)
     if mode == "wipe":
@@ -538,6 +562,7 @@ def _run(mode: str, args: argparse.Namespace) -> int:
         _check_grid(args, len(paths))
 
     clips = [probe(path) for path in paths]
+    args._still = _check_images(mode, args, clips, args.out)
     if mode == "grid":
         args._prompts = (
             prompts_mod.prepare(args._captions, args._baselines, args._segments, args.group)
@@ -553,7 +578,7 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             if args.out is None:
                 return 0
 
-    out = args.out or _default_out(mode, names)
+    out = args.out or _default_out(mode, names, args._still)
     out.parent.mkdir(parents=True, exist_ok=True)
     args._labels = _labels(args, names)
     args._titles = _titles(args, len(paths))
@@ -611,7 +636,8 @@ def _run(mode: str, args: argparse.Namespace) -> int:
 
     written = probe(out)
     size_mb = out.stat().st_size / 1_000_000
-    print(f"[{plan.mode}] done: {out}  ({written.duration:.1f}s, {size_mb:.1f} MB)")
+    shape = f"{written.width}x{written.height}" if args._still else f"{written.duration:.1f}s"
+    print(f"[{plan.mode}] done: {out}  ({shape}, {size_mb:.1f} MB)")
     if args.open and sys.platform == "darwin":
         subprocess.run(["open", str(out)], check=False)
     return 0

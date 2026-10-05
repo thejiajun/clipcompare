@@ -12,6 +12,9 @@ FITS = ("cover", "contain")
 LENGTHS = ("shortest", "longest")
 AUDIO_CHOICES = ("a", "b", "both", "none")
 
+# Output extensions that make a still picture rather than a video.
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+
 # Below this the two clips count as the same length and no padding is added.
 LENGTH_EPSILON = 0.04
 
@@ -102,6 +105,31 @@ def geometry(fit: str, width: int, height: int) -> str:
 
 def scale_chain(fit: str, width: int, height: int, fps: str) -> str:
     return f"fps={fps},{geometry(fit, width, height)},setsar=1,format=yuv420p"
+
+
+def still_chain(fit: str, width: int, height: int) -> str:
+    """scale_chain for a picture made of stills: one frame, kept in full-colour
+    RGB (yuv420p would halve the colour detail being compared)."""
+    return f"{geometry(fit, width, height)},setsar=1,format=rgb24"
+
+
+def hold_images(clips: list[ClipInfo]) -> list[ClipInfo]:
+    """Images among videos or audio last as long as the longest of those."""
+    longest = max((clip.duration for clip in clips if not clip.is_image), default=0.0)
+    if not longest:
+        return clips
+    return [replace(clip, duration=longest) if clip.is_image else clip for clip in clips]
+
+
+def still_args(out: Path) -> list[str]:
+    """Output flags for a single picture, in the format `out`'s extension names."""
+    args = ["-an", "-frames:v", "1", "-update", "1"]
+    suffix = out.suffix.lower()
+    if suffix in (".jpg", ".jpeg"):
+        args += ["-q:v", "2"]
+    elif suffix == ".webp":
+        args += ["-lossless", "1"]
+    return args
 
 
 def freeze_pads(a: ClipInfo, b: ClipInfo) -> tuple[str, str]:
@@ -243,7 +271,10 @@ def clamp_head(clip: ClipInfo, head: float | None) -> ClipInfo:
 
 def clip_input(clip: ClipInfo, head: float | None) -> Input:
     """The clip as an ffmpeg input; --head becomes an input -t, which cuts its
-    picture and its sound alike before any filter sees them."""
+    picture and its sound alike before any filter sees them. An image held
+    among videos (see hold_images) loops for its duration."""
+    if clip.is_image:
+        return (["-loop", "1", "-t", f"{clip.duration:.3f}"], str(clip.path)) if clip.duration else str(clip.path)
     return (["-t", f"{head:.3f}"], str(clip.path)) if head else str(clip.path)
 
 

@@ -36,3 +36,17 @@ def sound(duration=3.0, name="voice.mp3"):
 
 def graph(command: list[str]) -> str:
     return command[command.index("-filter_complex") + 1]
+
+
+def image(width=720, height=720, name="still.png"):
+    """A still image, shaped the way probe reports one."""
+    return ClipInfo(
+        path=Path(name),
+        width=width,
+        height=height,
+        fps="30",
+        fps_value=30.0,
+        duration=0.0,
+        has_audio=False,
+        still=True,
+    )

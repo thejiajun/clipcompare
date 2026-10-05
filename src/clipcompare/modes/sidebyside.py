@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..filters import (
@@ -18,9 +18,12 @@ from ..filters import (
     ffmpeg_head,
     encode_args,
     freeze_pads,
+    hold_images,
     picture,
     resolve_fps,
     scale_chain,
+    still_args,
+    still_chain,
     write_label_files,
 )
 from ..probe import ClipInfo, ProbeError
@@ -31,7 +34,7 @@ LAYOUTS = ("auto", "lr", "tb")
 @dataclass
 class Options(Common):
     layout: str = "auto"
-    panel: int = 1080      # short edge of each panel
+    panel: int = 0         # short edge of each panel; 0 = 1080, or an image's own size
     length: str = "shortest"
     divider: int = 4       # 1080-normalised px, 0 disables
     sequential: bool = False  # A plays through, then B; the idle side holds its frame
@@ -106,7 +109,15 @@ def panel_size(a: ClipInfo, panel: int) -> tuple[int, int]:
 
 
 def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None) -> Plan:
-    a, b = clamp_head(a, opts.head), clamp_head(b, opts.head)
+    # Two still images make one still picture.
+    still = a.is_image and b.is_image
+    if still:
+        opts = replace(opts, sequential=False, head=None)
+    else:
+        a, b = hold_images([clamp_head(a, opts.head), clamp_head(b, opts.head)])
+    # Stills keep their own pixels unless --panel says otherwise.
+    panel = opts.panel or (min(1080, a.width, a.height) if still else 1080)
+    opts = replace(opts, panel=panel)
     layout = resolve_layout(a, opts.layout)
     panel_w, panel_h = panel_size(a, opts.panel)
     if layout == "lr":
@@ -115,7 +126,7 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         out_w, out_h, stack = panel_w, panel_h * 2, "vstack"
 
     fps, fps_value = resolve_fps(a, b, opts.fps)
-    chain = scale_chain(opts.fit, panel_w, panel_h, fps)
+    chain = still_chain(opts.fit, panel_w, panel_h) if still else scale_chain(opts.fit, panel_w, panel_h, fps)
 
     inputs = [clip_input(a, opts.head), clip_input(b, opts.head)]
     if opts.sequential:
@@ -124,7 +135,7 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
             inputs.append((["-ss", f"{opts.hold_b_at:.3f}"], str(b.path)))
         shortest = 0
     else:
-        if opts.length == "longest":
+        if opts.length == "longest" or still:
             pad_a, pad_b = freeze_pads(a, b)
             shortest = 0
         else:
@@ -170,7 +181,9 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         steps.append(f"[{last}]{labels}[lv]")
         last = "lv"
 
-    if opts.sequential:
+    if still:
+        audio = "none"
+    elif opts.sequential:
         silent = opts.audio == "none" or not (a.has_audio or b.has_audio)
         audio = "none" if silent else "a→b"
     else:
@@ -182,8 +195,11 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     steps.append(f"[{last}]null[v]")
 
     cmd = ffmpeg_head(inputs, ";".join(steps))
-    cmd += audio_args("both" if audio == "a→b" else audio) + encode_args(opts)
-    if opts.length == "shortest" and not opts.sequential:
+    if still:
+        cmd += still_args(opts.out)
+    else:
+        cmd += audio_args("both" if audio == "a→b" else audio) + encode_args(opts)
+    if opts.length == "shortest" and not opts.sequential and not still:
         cmd += ["-shortest"]
     cmd += [str(opts.out)]
 
@@ -194,6 +210,6 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         fps=fps,
         fps_value=fps_value,
         audio=audio,
-        detail=f"{layout}, {opts.fit}, {'sequential' if opts.sequential else opts.length}",
+        detail=f"{layout}, {opts.fit}, {'image' if still else 'sequential' if opts.sequential else opts.length}",
         command=cmd,
     )

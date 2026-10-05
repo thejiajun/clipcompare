@@ -18,6 +18,10 @@ _QUARTER_TURNS = {90, -90, 270, -270}
 AUDIO_PANEL = 1080
 AUDIO_FPS = "30"
 
+# ffprobe reads a still image (png, jpg, webp, ...) through one of these
+# demuxers; such a file is one picture with no duration of its own.
+IMAGE_FORMATS = {"image2"}
+
 
 class ProbeError(RuntimeError):
     """ffprobe is missing, or a clip has nothing we can work with."""
@@ -39,10 +43,15 @@ class ClipInfo:
     duration: float     # seconds; 0.0 when the container does not say
     has_audio: bool
     has_video: bool = True  # False: audio only (mp3, wav, ...), drawn as a waveform
+    still: bool = False     # True: a still image, held for as long as its neighbours play
 
     @property
     def is_audio(self) -> bool:
         return not self.has_video
+
+    @property
+    def is_image(self) -> bool:
+        return self.still
 
     @property
     def is_portrait(self) -> bool:
@@ -154,6 +163,12 @@ def probe(path: Path) -> ClipInfo:
         width, height = height, width
 
     fps, fps_value = _rational(video.get("r_frame_rate"))
+    if is_image_format(data):
+        # A still's 25/1 "rate" is the demuxer's default, not the picture's.
+        return ClipInfo(
+            path=path, width=width, height=height, fps=AUDIO_FPS, fps_value=float(AUDIO_FPS),
+            duration=0.0, has_audio=False, still=True,
+        )
 
     return ClipInfo(
         path=path,
@@ -164,6 +179,11 @@ def probe(path: Path) -> ClipInfo:
         duration=_duration(data, [video, *(s for s in streams if s.get("codec_type") == "audio")]),
         has_audio=has_audio,
     )
+
+
+def is_image_format(data: dict) -> bool:
+    names = str((data.get("format") or {}).get("format_name") or "").split(",")
+    return any(name in IMAGE_FORMATS or name.endswith("_pipe") for name in names)
 
 
 def _duration(data: dict, streams: list[dict]) -> float:

@@ -66,3 +66,23 @@ def test_nothing_to_show_or_hear_is_an_error(monkeypatch, tmp_path):
     _ffprobe_says(monkeypatch, [{"codec_type": "data"}])
     with pytest.raises(ProbeError, match="no video or audio"):
         probe(tmp_path / "empty.bin")
+
+
+@pytest.mark.parametrize("demuxer", ["png_pipe", "jpeg_pipe", "webp_pipe", "image2"])
+def test_a_still_image_is_an_image_clip(monkeypatch, tmp_path, demuxer):
+    payload = json.dumps({
+        "streams": [{"codec_type": "video", "width": 720, "height": 720, "r_frame_rate": "25/1"}],
+        "format": {"format_name": demuxer},
+    })
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=payload, stderr=""),
+    )
+    info = probe(tmp_path / "still.png")
+    assert info.is_image and not info.is_audio and not info.has_audio
+    assert (info.width, info.height, info.duration) == (720, 720, 0.0)
+
+
+def test_a_video_is_not_an_image(monkeypatch, tmp_path):
+    _ffprobe_says(monkeypatch, [{"codec_type": "video", "width": 1080, "height": 1920}])
+    assert not probe(tmp_path / "clip.mp4").is_image
