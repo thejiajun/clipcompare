@@ -32,6 +32,7 @@ from ..filters import (
     even,
     encode_args,
     ffmpeg_head,
+    picture,
     resolve_fps,
     scale_chain,
     write_label_files,
@@ -121,10 +122,14 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     stroke_px = max(round(opts.stroke * out_h / 1080), 1)
     expr = wipe_expression(opts.direction, stroke_px / 2.0)
 
+    wave_a, head_a = picture(0, a, out_w, out_h, fps)
+    wave_b, head_b = picture(1, b, out_w, out_h, fps)
     steps = [
-        f"[0:v]{chain}[va]",
+        *wave_a,
+        *wave_b,
+        f"{head_a}{chain}[va]",
         # Pre-trim B so the two sides show the same timestamp during the sweep.
-        f"[1:v]{chain},trim=start={start:.3f},setpts=PTS-STARTPTS[vb]",
+        f"{head_b}{chain},trim=start={start:.3f},setpts=PTS-STARTPTS[vb]",
         f"[va][vb]xfade=transition=custom:duration={opts.wipe_dur:.3f}"
         f":offset={start:.3f}:expr='{expr}'[xf]",
     ]

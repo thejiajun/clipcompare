@@ -7,8 +7,9 @@ from pathlib import Path
 import pytest
 
 from clipcompare.modes.sidebyside import Options, build, panel_size, resolve_layout
+from clipcompare.probe import ProbeError
 
-from helpers import clip, graph
+from helpers import clip, graph, sound
 
 
 
@@ -184,7 +185,99 @@ def test_encode_settings_are_passed_through(crf, preset):
     assert cmd[cmd.index("-preset") + 1] == preset
 
 
+def test_sequential_holds_each_side_while_the_other_plays():
+    cmd = build(clip(duration=3.0), clip(duration=4.0), opts(sequential=True)).command
+    body = graph(cmd)
+    side_a, side_b = body.split("[va]")[0], body.split("[va]")[1].split("[vb]")[0]
+    assert "tpad=stop_mode=clone:stop_duration=4.000" in side_a
+    assert "trim=end_frame=1,tpad=stop_mode=clone:stop_duration=2.967[bh]" in side_b
+    assert "[bh][bp]concat=n=2:v=1:a=0" in side_b
+    assert "shortest=0" in body
+    assert "-shortest" not in cmd
+
+
+def test_sequential_skips_b_black_lead_in_for_the_still_and_its_turn():
+    plan = build(
+        clip(duration=3.0),
+        clip(duration=4.0, audio=True, name="b.mp4"),
+        opts(sequential=True, hold_b_at=0.112),
+    )
+    cmd, body = plan.command, graph(plan.command)
+    assert cmd.count("-i") == 3
+    still = cmd.index("-i", cmd.index("-i", cmd.index("-i") + 1) + 1)
+    assert cmd[still - 2 : still + 2] == ["-ss", "0.112", "-i", "b.mp4"]
+    assert "[2:v]" in body
+    assert "trim=start=0.112,setpts=PTS-STARTPTS[bp]" in body
+    assert "tpad=stop_mode=clone:stop_duration=3.888[va]" in body
+    assert "atrim=0.112:4.000" in body
+
+
+def test_sequential_sound_is_a_then_b_each_cut_to_its_turn():
+    plan = build(clip(duration=3.0, audio=True), clip(duration=4.0, audio=True), opts(sequential=True))
+    body = graph(plan.command)
+    assert plan.audio == "a→b"
+    assert "[0:a]aresample=48000" in body and "atrim=0.000:3.000" in body
+    assert "[1:a]aresample=48000" in body and "atrim=0.000:4.000" in body
+    assert "[s0][s1]concat=n=2:v=0:a=1[aout]" in body
+    assert plan.command[plan.command.index("[aout]") - 1] == "-map"
+
+
+def test_sequential_gives_a_silent_clip_silence_for_its_turn():
+    body = graph(build(clip(audio=False), clip(audio=True), opts(sequential=True)).command)
+    assert "anullsrc=r=48000:cl=stereo,atrim=0.000:3.000" in body
+    assert "[0:a]" not in body
+    assert "[1:a]" in body
+
+
+def test_sequential_with_audio_none_stays_silent():
+    plan = build(clip(audio=True), clip(audio=True), opts(sequential=True, audio="none"))
+    assert plan.audio == "none"
+    assert "-an" in plan.command
+    assert "[aout]" not in graph(plan.command)
+
+
+def test_head_cuts_both_inputs_at_once():
+    cmd = build(clip(duration=10.0, name="a.mp4"), clip(duration=10.0, name="b.mp4"), opts(head=4.0)).command
+    assert cmd[cmd.index("a.mp4") - 3 : cmd.index("a.mp4")] == ["-t", "4.000", "-i"]
+    assert cmd[cmd.index("b.mp4") - 3 : cmd.index("b.mp4")] == ["-t", "4.000", "-i"]
+    assert "-shortest" in cmd
+
+
+def test_head_gives_each_sequential_turn_its_first_seconds():
+    plan = build(
+        clip(duration=10.0, audio=True), clip(duration=10.0, audio=True),
+        opts(sequential=True, head=4.0),
+    )
+    body = graph(plan.command)
+    assert "tpad=stop_mode=clone:stop_duration=4.000[va]" in body
+    assert "atrim=0.000:4.000" in body
+    assert body.count("atrim=0.000:4.000") == 2
+
+
+def test_sequential_needs_known_durations():
+    with pytest.raises(ProbeError):
+        build(clip(duration=0.0), clip(), opts(sequential=True))
+
+
 def test_filtergraph_labels_form_one_connected_chain():
     body = graph(build(clip(), clip(), opts()).command)
     assert body.endswith("[v]")
     assert body.count("[st]") == 2  # produced once, consumed once
+
+
+def test_audio_sides_are_waveform_panels():
+    plan = build(sound(name="v3.mp3"), sound(name="v4.mp3"), opts(audio="both"))
+    body = graph(plan.command)
+    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in body
+    assert "[1:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in body
+    assert "[0:v]" not in body and "[1:v]" not in body
+    assert "[0:a][1:a]amix" in body  # the same sound still feeds the mix
+
+
+def test_sequential_audio_b_waits_flat_and_needs_no_still_read():
+    plan = build(sound(duration=3.0, name="a.mp3"), sound(duration=4.0, name="b.mp3"), opts(sequential=True))
+    body, cmd = graph(plan.command), plan.command
+    assert cmd.count("-i") == 2
+    assert "apad=whole_dur=6.967" in body          # a flat once its turn is over
+    assert "adelay=delays=2967:all=1" in body       # b flat until its turn
+    assert "[s0][s1]concat=n=2:v=0:a=1[aout]" in body

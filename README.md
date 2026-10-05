@@ -1,24 +1,88 @@
 # clipcompare
 
-把两个视频拼成一个对比视频的命令行工具，三种呈现方式。只依赖 `ffmpeg` / `ffprobe`，Python 侧零第三方依赖。
+把两个或更多视频拼成一个对比视频的命令行工具，四种呈现方式。只依赖 `ffmpeg` / `ffprobe`，Python 侧零第三方依赖。
 
 ```bash
 clipcompare side input.mp4 output.mp4    # 并排
 clipcompare wipe before.mp4 after.mp4    # 扫描揭示
 clipcompare pip  before.mp4 after.mp4    # 画中画
+clipcompare grid a.mp4 b.mp4 c.mp4 ...   # N×M 网格
 ```
 
 `sbs` 是这个命令的短别名，敲 `sbs side ...` 完全等价。
 
-## 三种模式
+## 四种模式
 
 | 模式 | 画面 | 适合 |
 |------|------|------|
 | **side** | 两段同时在画面上，竖版左右并排、横版上下堆叠 | 内容不同、需要逐帧对照 |
 | **wipe** | 一条缓动的白线扫过，原地把 B 揭示在 A 之上 | 同机位同时间点的前后对比（调色、修复、VFX） |
 | **pip** | 一段全屏，另一段作为圆角小窗嵌在角落 | 主推成片、原片只作佐证 |
+| **grid** | 任意多段按阅读顺序铺成 N×M 网格，一起播或轮流播 | 一次看完一批版本（多语言配音、多组参数、多个模型） |
 
 `wipe` 和 `pip` 要求两段素材**同机位、同时间点**——它们是「原地对比」，工具不做内容对位。`side` 没这个要求。
+
+## 纯音频片段
+
+任何模式都可以直接吃 mp3 / wav / m4a / aac / ogg / flac（或任何 ffprobe 认为没有画面的文件；mp3 里内嵌的封面图不算画面）。纯音频片段在画面上是一块深色面板，底部一条跟着声音实时跳动的波形带，上方留给标签和提示词。
+
+最常用的是 `grid --sequential`：一次只播一段，正在播的那格描边、只有它的波形在动，声音跟着它走，两段之间默认停 0.5 秒。全是音频时没有比例可跟，四段以内排成一行、铺满 1920×1080：
+
+```bash
+# 两版配音：左边播完停半秒，再播右边
+sbs grid v3.mp3 v4.mp3 --sequential -l "Eleven v3,Eleven v4"
+
+# 五个角色各一组：每组左右两格、顶部写角色名，五组接着播
+sbs grid kali-v3.mp3 kali-v4.mp3 alia-v3.mp3 alia-v4.mp3 ... \
+  --sequential --group 2 -l "Eleven v3,Eleven v4" --title "Kali,Alia,..."
+```
+
+## 提示词对比（manifest）
+
+对比 TTS / 生成模型的不同版本时，真正想看的是「提示词改了什么、听起来差在哪」。把片段、标签、提示词、组名写进一个 JSON，一条命令出整段对比视频，外加一个可以来回切换版本的网页：
+
+```bash
+sbs grid --manifest megan-project/clips.json --html megan-project/compare.html
+```
+
+```json
+{
+  "titles": ["Alia", "Yasmine"],
+  "out": "megan-project-sbs.mp4",
+  "clips": [
+    {"file": "megan-project/alia-1-v3-plain.mp3", "label": "v3 · plain", "prompt": "...", "baseline": true,
+     "segments": [{"text": "...", "start": 0, "end": 16.2, "estimated": true}, ...]},
+    {"file": "https://cdn.example.com/alia-2.mp3", "label": "v3 · bracket", "prompt": "[warm] ..."}
+  ]
+}
+```
+
+- **分组**：组大小 = 片段数 ÷ 组名数（也可以写 `"group"`）；manifest 默认轮流播放（`"sequential": false` 关掉），组间照常停 0.5 秒。
+- **路径**：`file` 先在 manifest 所在文件夹找，再找上一级，再找当前目录；也可以是 http(s) URL。`out` 写在 manifest 旁边。
+- **manifest 本身**可以是文件、URL（`--manifest https://…`，需要鉴权时加 `--header "Authorization: Bearer …"`）或标准输入（`--manifest -`）。URL manifest 里的相对 `file` 按那个 URL 解析，`out` 只取文件名、写到当前目录。
+- **URL 片段**先下载到 `~/.cache/clipcompare/media/`（按 URL 缓存，带 curl 的 User-Agent——有的媒体服务器会拒绝 Python 默认 UA），再从本地文件渲染：一段片段要被读好几次（probe、找开头黑帧、静止帧），本地文件每次都一样快、一样完整。
+
+**视频里看到的**：每格左上角是标签，下面一行是它跟 baseline 比的差异摘要（`+6 tags · 10 emphasis · no 'energetic'`，baseline 那格写 `baseline`）。轮到哪格，哪格中间就大字显示提示词，跟着声音一段一段往前走：正在说的那段全亮，前一段末行和后面几段调暗；段落时间是估算的会注一行 `timing estimated`。没有 `segments` 的就整段一次显示。字号按**最长的一段**（不是整段提示词）来定，从 30px 往下缩到放得下为止，最小 15px，再放不下才用 … 截断；`--group` 的所有组共用一个字号。
+
+**差异标记**（视频和网页一样）：先去掉 `[tag]`，按词用 difflib 对齐 baseline：
+
+| 标记 | 含义 |
+|------|------|
+| 紫色 `--ds-accent-700` 的 `[tag]` | baseline 没有的指令（tag 里按逗号拆开比，`[speaking quickly, warm]` 只要有一个新指令就算新） |
+| 紫色下划线 | 同一个词只改了大小写或标点（`TEN`、`saved...`），或 baseline 没有的标点（`—`） |
+| 普通米白 `--ds-eggshell` | 其他（包括 baseline 也有的 tag） |
+
+画法：ffmpeg 的 `drawtext` 一次只能画一种颜色、也不能画下划线，所以排版在 Python 里做——直接从字体文件读字宽（`metrics.py`，不依赖 Pillow），按样式切成一段段，每段一个 drawtext 画在算好的 x 上，下划线是量好宽度的 drawbox。每个（片段，段落）先渲成一张 PNG，正片只在对应时间段叠上去。
+
+**网页（`--html OUT.html`）**：一个自包含的 HTML，CSS / JS 内联、不连 CDN，`file://` 离线可用；字体用本机的 Telka，没有就退回系统无衬线。每组一个播放器：
+
+- 点版本按钮或按 `1`–`9` 切换，**停在剧本里的同一位置**：两边都有段落时间时按「第几段、段内百分比」换算，否则按时长比例换算；空格播放 / 暂停。
+- 提示词带同样的差异标记，正在说的那段高亮并滚到顶部。
+- 每个版本标出时长和 WPM（去掉 tag 后的词数 ÷ 时长）。
+- 本地音频按相对网页的路径引用、不复制；URL 原样引用，加 `--copy-media` 会下载到网页旁边的 `media/`，整个文件夹拷走也能离线听。
+- 单写 `--html` 只出网页；有 `-o` 或 manifest 里有 `out` 时视频和网页一起出。
+
+不用 manifest 也能加提示词：`--captions prompts.json`（字符串数组，每段一个，`null` 表示没有）；没有 baseline 时所有 tag 都标紫、没有差异摘要。
 
 ## 安装
 
@@ -50,7 +114,22 @@ brew install ffmpeg
 --no-labels              # 都不要
 ```
 
-不写就用两个文件名（去后缀、转大写）。默认字体是自带的 **TikTok Sans Medium**（从官方可变字体按 `wght=500` 实例化——它自带的默认实例是 Light，压在画面上太单薄）。TikTok Sans 只有拉丁字形，所以中文标签会自动换系统黑体，中英混排也正常。三种模式都画标签——`wipe` 的标签跟着扫描线在原地切换（扫描前显示 A，扫描后显示 B），`pip` 的小窗标签会按小窗尺寸缩小字号。
+不写就用两个文件名（去后缀、转大写）。默认字体跟 Pika 设计系统（`@mellis-labs/design-system`）走：标签用 **Telka Medium**（`--ds-font-sans`），`--title` 用 **Telka Extended Medium**（`--ds-font-display`）。Telka 是商业授权字体，设计系统只从 Pika CDN 加载、不随包分发，所以这里**不打包**：本机装了（`~/Library/Fonts`、`/Library/Fonts` 或 Linux 的字体目录里有 `Telka-Medium.otf` / `Telka-ExtendedMedium.otf`）就用，没装就退回自带的 **TikTok Sans Medium**（从官方可变字体按 `wght=500` 实例化——它自带的默认实例是 Light，压在画面上太单薄）。两者都只有拉丁字形，所以中文标签会自动换系统黑体，中英混排也正常。每种模式都画标签——`wipe` 的标签跟着扫描线在原地切换（扫描前显示 A，扫描后显示 B），`pip` 的小窗标签会按小窗尺寸缩小字号。
+
+## 设计系统配色
+
+默认颜色全部取自 Pika 设计系统的 token（`src/clipcompare/tokens.py`，常量按 token 命名；画面永远是深色底，半透明 token 取暗色主题的值）：
+
+| 用在哪 | token | 值 |
+|------|------|------|
+| 波形面板底色、标题条 | `--ds-black` | `#111111` |
+| 波形、正在播放的描边、第二个标签的字、新 tag、下划线 | `--ds-accent-700`（= `--ds-brand`） | `#cfc3ff` |
+| 标签 / 标题 / 提示词的字 | `--ds-eggshell`（暗色 `--ds-text-primary`） | `#fcfaf7` |
+| 差异摘要、`timing estimated` | `--ds-text-secondary`（暗色） | `#fcfaf7b3` |
+| 标签 / 标题的底 | `--ds-invert-600`（暗色） | `rgb(34 34 34 / 60%)` |
+| 波形面板的中线 | `--ds-primary-300`（暗色） | `rgb(252 250 247 / 10%)` |
+
+`side` 的分隔线、`wipe` 的扫描线、`pip` 的边框仍是白色。
 
 ## 通用参数
 
@@ -60,8 +139,8 @@ brew install ffmpeg
 |------|------|
 | `-o, --out PATH` | 输出文件 |
 | `-l / -A / -B / --no-labels` | 标签，见上 |
-| `--font PATH` | 标签字体。默认自带 TikTok Sans Medium，中文自动换系统黑体 |
-| `--color-a / --color-b HEX` | 两个标签的颜色，默认白色 + 淡紫 `#cfc3ff` |
+| `--font PATH` | 标签和标题字体。默认本机装了 Telka 就用 Telka，否则自带 TikTok Sans Medium；中文自动换系统黑体 |
+| `--color-a / --color-b HEX` | 两个标签的颜色，默认 `--ds-eggshell` `#fcfaf7` + `--ds-accent-700` `#cfc3ff` |
 | `--fit cover\|contain` | `cover` 裁切填满（默认）；`contain` 留黑边保留完整画面 |
 | `--audio a\|b\|both\|none` | 默认 `b`；`both` 混音；某段没音轨时自动退回有音轨的那段 |
 | `--fps N` | 强制输出帧率，默认对齐到两段里较高的那个 |
@@ -79,6 +158,8 @@ brew install ffmpeg
 | `--panel PX` | 每块画面的**短边**，默认 1080 —— 竖版出 2160×1920，横版出 1920×2160 |
 | `--length shortest\|longest` | `longest` 把较短那段的最后一帧冻住补齐 |
 | `--divider PX` | 中缝分隔线粗细，默认 4，`0` 关闭。线是叠加绘制的，输出尺寸不变，调粗会盖住两侧画面各一半线宽 |
+| `--head SEC` | 每段只取前 SEC 秒：同时播放时成片就是前 SEC 秒；配合 `--sequential` 时每段轮到时只播前 SEC 秒 |
+| `--sequential` | 轮流播放：A 先播完，B 再播。等待的一侧停在画面上（B 停在第一个有画面的帧 —— 自动跳过开头的黑帧，AI 生成的视频常见；A 播完停在最后一帧），声音跟着正在播的那一侧走；成片时长 = 两段相加。`--audio none` 静音，`--length` 不起作用 |
 
 ### wipe
 
@@ -108,6 +189,29 @@ brew install ffmpeg
 | `--length shortest\|longest` | 同 side |
 | `--panel PX` | 输出短边，默认 0 = 保持主画面原始分辨率 |
 
+### grid
+
+`grid` 吃任意多段（至少两段），按阅读顺序（先从左到右，再往下）铺格子。每格的比例跟第一段走；`--fit` 决定其余不同比例的片段是裁切还是留黑边。标签用 `-l "A,B,C,..."` 按顺序一一对应，不写就用文件名；标签颜色用 `--color`。
+
+| 参数 | 说明 |
+|------|------|
+| `--cols N` / `--rows M` | 列数 / 行数。都不写时自动：让整张画面接近 16:9，再去掉多余的空列；只写一个时另一个自动补齐 |
+| `--panel PX` | 每格的**短边**。默认自动：整张画面长边不超过 3840，单格短边不超过 1080 |
+| `--gap PX` | 格子之间的黑缝，1080p 下的像素，默认 4，`0` 无缝。没铺满的空格也填黑 |
+| `--length shortest\|longest` | 同时播放时：`shortest` 按最短那段截；`longest` 让短的冻住最后一帧 |
+| `--sequential` | 轮流播放：按阅读顺序一次只播一格，没轮到的停在第一个有画面的帧（自动跳过开头黑帧），播完的停在最后一帧，**正在播的那格描边**，声音跟着它走 |
+| `--highlight HEX` | 正在播放那格的描边颜色，默认 `--ds-accent-700` `#cfc3ff` |
+| `--head SEC` | 每段只取前 SEC 秒（同时播放、轮流播放都适用） |
+| `--pause SEC` | 轮流播放时两段之间停多久（画面停住、没有声音），默认 0.5，`0` 无停顿 |
+| `--title TEXT` | 网格上方标题条里居中的标题（不会压到格子之间的缝）；配合 `--group` 时每组一个，逗号分隔 |
+| `--manifest FILE\|URL\|-` | 从 JSON 读片段、标签、提示词、组名和输出，见「提示词对比」 |
+| `--header "NAME: VALUE"` | 拉取 URL manifest 时带的 HTTP 头，可重复 |
+| `--captions FILE` | 每段一条提示词（JSON 字符串数组），播放时显示在格子里 |
+| `--html OUT.html` | 另出一个可切换版本的网页 |
+| `--copy-media` | 配合 `--html`：把 URL 片段下载到网页旁边，离线可用 |
+| `--group N` | 每 N 段一组（如 `2` 就是一对一对比），每组单独成一张网格、按顺序接起来播。片段数必须能被 N 整除；`-l` 可以只写 N 个标签，每组共用 |
+| `--audio auto\|none\|mix\|N` | 默认 `auto`：轮流播放时跟着正在播的那格，同时播放时用第一段有声音的；`mix` 全部混音；数字 = 只用第 N 段的声音 |
+
 ## 常用例子
 
 ```bash
@@ -119,6 +223,15 @@ clipcompare side orig.mp4 vfx.mp4 -l "ORIGINAL,EDITED" --panel 2160 --audio both
 
 # 两段画幅不一样，留黑边保完整画面；短的那段冻帧补齐
 clipcompare side a.mov b.mov --fit contain --length longest -o cmp.mp4
+
+# 两段都有人声（比如两版配音）：左边播完再播右边，声音不会叠在一起
+sbs side dub-a.mp4 dub-b.mp4 --sequential
+
+# 一批配音版本拼成网格，每段只听前 8 秒，轮流播
+clipcompare grid dub-*.mp4 --sequential --head 8
+
+# 固定 4 列，同时播放，混音
+clipcompare grid v1.mp4 v2.mp4 v3.mp4 v4.mp4 v5.mp4 --cols 4 --audio mix
 
 # 调色前后：扫描线晚一点触发，线粗一点
 clipcompare wipe raw.mp4 graded.mp4 --pace late --stroke 5 -l "RAW,GRADED"
@@ -209,14 +322,17 @@ uv tool install --force .
 
 构建后端是 hatchling，它不产生增量的 `build/` 目录 —— setuptools 的那个会把源码里已删除的文件继续打进 wheel。改完代码若发现装进去的还是旧的，用 `uv tool install --reinstall .`，`--force` 在版本号不变时会复用缓存的 wheel。
 
-每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试，79 个测试跑完不到 0.1 秒。
+每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试，180 多个测试跑完不到半秒（网页里的换算逻辑用 node 跑，没装 node 时跳过）。
 
 ## 已知边界
 
 - `wipe` / `pip` 要求两段素材同机位同时间点，工具不做内容对位。
 - 标签是直角药丸、没有字间距 —— ffmpeg 的 `drawtext` 画不了圆角和 letter-spacing。要圆角药丸得换成离屏渲染 PNG 再叠，那会引入浏览器依赖，不值。
 - 中文字体回退目前只覆盖 macOS 自带黑体和常见的 Linux Noto CJK 路径。都找不到时会提示你用 `--font` 指定。
-- 只支持两段素材。三段以上的网格对比不在这里。
+- 纯音频片段的波形面板只在 `grid` 里会自动铺满 16:9；`side` 两段音频出 2160×1080，`wipe` / `pip` 能用但意义不大。`--pause` 目前只有 `grid` 有。
+- 提示词排版忽略字距调整（kerning），一行最多偏几个像素；字号 15px 还放不下的段落会被截断，完整内容看网页。
+- `--group` 先把每组单独渲染、再不重编码地拼起来，所以每组的格数、尺寸都相同；某一组完全没有声音时拼接会出错。
+- `side` / `wipe` / `pip` 只吃两段；三段以上用 `grid`。`grid` 的片段越多，ffmpeg 同时解码的路数越多，渲染越慢。
 
 ## License
 

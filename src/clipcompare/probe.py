@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -11,6 +12,11 @@ from pathlib import Path
 
 # Display Matrix rotations that swap the stored width and height.
 _QUARTER_TURNS = {90, -90, 270, -270}
+
+# An audio-only clip has no frame of its own: it is drawn as a square waveform
+# panel at this size, at this rate, until a mode sizes it like its neighbours.
+AUDIO_PANEL = 1080
+AUDIO_FPS = "30"
 
 
 class ProbeError(RuntimeError):
@@ -32,6 +38,11 @@ class ClipInfo:
     fps_value: float
     duration: float     # seconds; 0.0 when the container does not say
     has_audio: bool
+    has_video: bool = True  # False: audio only (mp3, wav, ...), drawn as a waveform
+
+    @property
+    def is_audio(self) -> bool:
+        return not self.has_video
 
     @property
     def is_portrait(self) -> bool:
@@ -65,6 +76,34 @@ def _rational(value: str | None) -> tuple[str, float]:
     return value, as_float
 
 
+_BLACK = re.compile(r"black_start:([0-9.]+)\s+black_end:([0-9.]+)")
+# A clip's first frame often sits a few ms after zero (an edit list, a B-frame
+# delay), so black that starts within this much of the top is its lead-in.
+LEAD_IN_SLACK = 0.25
+
+
+def parse_lead_in_black(log: str) -> float:
+    match = _BLACK.search(log)
+    if match is None or float(match.group(1)) > LEAD_IN_SLACK:
+        return 0.0
+    return float(match.group(2))
+
+
+def lead_in_black(path: Path, window: float = 3.0) -> float:
+    """Seconds of black at the very start of a clip — AI renders (lipsync in
+    particular) often open on a few black frames. 0.0 when it opens on picture."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-t", f"{window}", "-i", str(path),
+            "-vf", "scale=270:-2,blackdetect=d=0:pix_th=0.10",
+            "-an", "-f", "null", "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return parse_lead_in_black(result.stderr)
+
+
 def probe(path: Path) -> ClipInfo:
     result = subprocess.run(
         [
@@ -81,9 +120,30 @@ def probe(path: Path) -> ClipInfo:
 
     data = json.loads(result.stdout or "{}")
     streams = data.get("streams") or []
-    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    # Cover art in an mp3 or m4a shows up as a one-frame video stream; it is
+    # not a picture to compare, so such a file counts as audio only.
+    video = next(
+        (
+            s for s in streams
+            if s.get("codec_type") == "video"
+            and not (s.get("disposition") or {}).get("attached_pic")
+        ),
+        None,
+    )
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
     if video is None:
-        raise ProbeError(f"no video stream in {path}")
+        if not has_audio:
+            raise ProbeError(f"no video or audio stream in {path}")
+        return ClipInfo(
+            path=path,
+            width=AUDIO_PANEL,
+            height=AUDIO_PANEL,
+            fps=AUDIO_FPS,
+            fps_value=float(AUDIO_FPS),
+            duration=_duration(data, streams),
+            has_audio=True,
+            has_video=False,
+        )
 
     width = int(video.get("width") or 0)
     height = int(video.get("height") or 0)
@@ -95,21 +155,27 @@ def probe(path: Path) -> ClipInfo:
 
     fps, fps_value = _rational(video.get("r_frame_rate"))
 
-    duration = 0.0
-    for candidate in (video.get("duration"), (data.get("format") or {}).get("duration")):
-        try:
-            duration = float(candidate)
-        except (TypeError, ValueError):
-            continue
-        if duration > 0:
-            break
-
     return ClipInfo(
         path=path,
         width=width,
         height=height,
         fps=fps,
         fps_value=fps_value,
-        duration=max(duration, 0.0),
-        has_audio=any(s.get("codec_type") == "audio" for s in streams),
+        duration=_duration(data, [video, *(s for s in streams if s.get("codec_type") == "audio")]),
+        has_audio=has_audio,
     )
+
+
+def _duration(data: dict, streams: list[dict]) -> float:
+    """The clip lasts as long as its longest stream: a dub that runs past the
+    picture must be heard to the end (the picture holds its last frame)."""
+    lengths = []
+    for candidate in (
+        (data.get("format") or {}).get("duration"),
+        *(s.get("duration") for s in streams),
+    ):
+        try:
+            lengths.append(float(candidate))
+        except (TypeError, ValueError):
+            continue
+    return max((length for length in lengths if length > 0), default=0.0)

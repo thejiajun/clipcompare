@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .probe import ClipInfo
+from .tokens import DS_ACCENT_700, DS_BLACK, DS_EGGSHELL, DS_INVERT_600_DARK, DS_PRIMARY_300_DARK
 
 FITS = ("cover", "contain")
 LENGTHS = ("shortest", "longest")
@@ -13,6 +14,21 @@ AUDIO_CHOICES = ("a", "b", "both", "none")
 
 # Below this the two clips count as the same length and no padding is added.
 LENGTH_EPSILON = 0.04
+
+# An audio-only clip is drawn as its live waveform: a band along the bottom of
+# a plain dark panel (the top is left for its label and caption), scaled by
+# sqrt so quiet speech still visibly moves.
+WAVE_BACKGROUND = DS_BLACK
+WAVE_COLOR = DS_ACCENT_700
+WAVE_BAND = 0.3          # share of the panel height the waveform band takes
+WAVE_MARGIN = 0.04       # gap under the band, as a share of the panel height
+WAVE_BASELINE = DS_PRIMARY_300_DARK  # a faint centre line, so a silent panel still reads as one
+
+
+def wave_band(height: int) -> tuple[int, int]:
+    """(top, height) of the waveform band inside a panel `height` tall."""
+    band = max(even(round(height * WAVE_BAND)), 2)
+    return max(height - band - round(height * WAVE_MARGIN), 0), band
 
 
 @dataclass
@@ -24,12 +40,13 @@ class Common:
     fonts: tuple[Path, Path] | None = None  # one per label; see fonts.resolve
     audio: str = "b"
     fit: str = "cover"
-    color_a: str = "#ffffff"
-    color_b: str = "#cfc3ff"
-    label_bg: str = "black@0.55"
+    color_a: str = DS_EGGSHELL
+    color_b: str = DS_ACCENT_700
+    label_bg: str = DS_INVERT_600_DARK
     fps: str | None = None                  # None means match the faster clip
     crf: int = 18
     preset: str = "medium"
+    head: float | None = None               # use only the first SEC of every clip
 
 
 @dataclass
@@ -46,6 +63,7 @@ class Plan:
     command: list[str] = field(default_factory=list)
     # Commands that must run before `command` (pip renders its mask first).
     pre_commands: list[list[str]] = field(default_factory=list)
+    caption_size: int = 0   # grid: the prompt text size it settled on
 
 
 def escape(value: str) -> str:
@@ -185,8 +203,48 @@ def encode_args(common: Common) -> list[str]:
     ]
 
 
+def picture(
+    index: int, clip: ClipInfo, width: int, height: int, fps: str,
+    delay: float = 0.0, total: float = 0.0,
+) -> tuple[list[str], str]:
+    """(steps, head) for a clip's picture, where `head` starts the chain that
+    scales it — `[0:v]` for a video. An audio-only clip gets a waveform panel
+    built from its own sound instead, already at width x height. `delay` holds
+    the line flat (silence) for that long first, and `total` keeps it flat
+    after the sound ends until then — so the line moves only while it plays."""
+    if not clip.is_audio:
+        return [], f"[{index}:v]"
+    timing = ""
+    if delay > 0:
+        timing += f",adelay=delays={round(delay * 1000)}:all=1"
+    if total > 0:
+        timing += f",apad=whole_dur={total:.3f}"
+    top, band = wave_band(height)
+    name = f"wave{index}"
+    return [
+        f"color=c={WAVE_BACKGROUND}:s={width}x{height}:r={fps},"
+        f"drawbox=x=0:y={top + band // 2 - 1}:w={width}:h=2:color={WAVE_BASELINE}:t=fill[{name}bg]",
+        f"[{index}:a]aresample=48000,aformat=channel_layouts=mono{timing},"
+        f"showwaves=s={width}x{band}:mode=cline:scale=sqrt:rate={fps}:colors={WAVE_COLOR}:draw=full[{name}w]",
+        f"[{name}bg][{name}w]overlay=0:{top}:shortest=1,format=yuv420p[{name}]",
+    ], f"[{name}]"
+
+
 # An input is either a path, or per-input flags plus a path (e.g. -loop 1).
 Input = str | tuple[list[str], str]
+
+
+def clamp_head(clip: ClipInfo, head: float | None) -> ClipInfo:
+    """--head: the clip as the rest of the plan sees it once cut to its first SEC."""
+    if not head:
+        return clip
+    return replace(clip, duration=min(clip.duration, head) if clip.duration else head)
+
+
+def clip_input(clip: ClipInfo, head: float | None) -> Input:
+    """The clip as an ffmpeg input; --head becomes an input -t, which cuts its
+    picture and its sound alike before any filter sees them."""
+    return (["-t", f"{head:.3f}"], str(clip.path)) if head else str(clip.path)
 
 
 def ffmpeg_head(inputs: list[Input], filtergraph: str) -> list[str]:

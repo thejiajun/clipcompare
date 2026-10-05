@@ -34,6 +34,7 @@ from ..filters import (
     ffmpeg_head,
     freeze_pads,
     geometry,
+    picture,
     resolve_fps,
     scale_chain,
     write_label_files,
@@ -100,7 +101,7 @@ def _corner_position(
 def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None) -> Plan:
     inset_is_a = opts.inset == "a"
     main = b if inset_is_a else a
-    main_stream, inset_stream = ("1:v", "0:v") if inset_is_a else ("0:v", "1:v")
+    main_index, inset_index = (1, 0) if inset_is_a else (0, 1)
 
     out_w, out_h = main_size(main, opts.panel)
     fps, fps_value = resolve_fps(a, b, opts.fps)
@@ -131,9 +132,16 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         f"fps={fps},{geometry(opts.fit, inset_w, inset_h)},setsar=1,format=yuva420p"
     )
 
+    # An audio-only clip's waveform runs flat to the end instead of freezing.
+    longest = max(a.duration, b.duration) if opts.length == "longest" else 0.0
+    clips = (a, b)
+    wave_main, head_main = picture(main_index, clips[main_index], out_w, out_h, fps, total=longest)
+    wave_inset, head_inset = picture(inset_index, clips[inset_index], inset_w, inset_h, fps, total=longest)
     steps = [
-        f"[{main_stream}]{main_chain}{pad_main}[vmain]",
-        f"[{inset_stream}]{inset_chain}{pad_inset}[vins]",
+        *wave_main,
+        *wave_inset,
+        f"{head_main}{main_chain}{'' if clips[main_index].is_audio else pad_main}[vmain]",
+        f"{head_inset}{inset_chain}{'' if clips[inset_index].is_audio else pad_inset}[vins]",
     ]
 
     # The masks come in via -loop 1 and never end, so every alphamerge that
