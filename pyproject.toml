@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clipcompare"
-version = "0.5.0"
+version = "0.6.0"
 description = "Comparison videos from two clips — side-by-side, wipe reveal, picture-in-picture."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,7 +31,6 @@ Issues = "https://github.com/thejiajun/clipcompare/issues"
 
 [project.scripts]
 clipcompare = "clipcompare.cli:main"
-sbs = "clipcompare.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

@@ -9,7 +9,7 @@ clipcompare pip  before.mp4 after.mp4    # 画中画
 clipcompare grid a.mp4 b.mp4 c.mp4 ...   # N×M 网格
 ```
 
-`sbs` 是这个命令的短别名，敲 `sbs side ...` 完全等价。
+命令只有 `clipcompare` 一个。嫌长可以在自己的 shell 里加 `alias sbs=clipcompare`，工具本身不带这个别名。模式名 `sbs` 等同于 `side`（`clipcompare sbs a.mp4 b.mp4`）。
 
 ## 四种模式
 
@@ -30,10 +30,10 @@ clipcompare grid a.mp4 b.mp4 c.mp4 ...   # N×M 网格
 
 ```bash
 # 两版配音：左边播完停半秒，再播右边
-sbs grid v3.mp3 v4.mp3 --sequential -l "Eleven v3,Eleven v4"
+clipcompare grid v3.mp3 v4.mp3 --sequential -l "Eleven v3,Eleven v4"
 
 # 五个角色各一组：每组左右两格、顶部写角色名，五组接着播
-sbs grid kali-v3.mp3 kali-v4.mp3 alia-v3.mp3 alia-v4.mp3 ... \
+clipcompare grid kali-v3.mp3 kali-v4.mp3 alia-v3.mp3 alia-v4.mp3 ... \
   --sequential --group 2 -l "Eleven v3,Eleven v4" --title "Kali,Alia,..."
 ```
 
@@ -50,7 +50,7 @@ sbs grid kali-v3.mp3 kali-v4.mp3 alia-v3.mp3 alia-v4.mp3 ... \
 
 ```bash
 # 三张截图拼一行，顶部写标题
-sbs grid c1.png c2.png c3.png -o compare.png \
+clipcompare grid c1.png c2.png c3.png -o compare.png \
   -l "Kling original · 13.0 Mbps,Old fit crf 18 · 5.1 Mbps,New fit copy · 13.0 Mbps" \
   --title "Yuna b01 · forehead crop 2x"
 ```
@@ -60,13 +60,13 @@ sbs grid c1.png c2.png c3.png -o compare.png \
 对比 TTS / 生成模型的不同版本时，真正想看的是「提示词改了什么、听起来差在哪」。把片段、标签、提示词、组名写进一个 JSON，一条命令出整段对比视频，外加一个可以来回切换版本的网页：
 
 ```bash
-sbs grid --manifest megan-project/clips.json --html megan-project/compare.html
+clipcompare grid --manifest megan-project/clips.json --html megan-project/compare.html
 ```
 
 ```json
 {
   "titles": ["Alia", "Yasmine"],
-  "out": "megan-project-sbs.mp4",
+  "out": "megan-project-compare.mp4",
   "clips": [
     {"file": "megan-project/alia-1-v3-plain.mp3", "label": "v3 · plain", "prompt": "...", "baseline": true,
      "segments": [{"text": "...", "start": 0, "end": 16.2, "estimated": true}, ...]},
@@ -243,7 +243,7 @@ clipcompare side orig.mp4 vfx.mp4 -l "ORIGINAL,EDITED" --panel 2160 --audio both
 clipcompare side a.mov b.mov --fit contain --length longest -o cmp.mp4
 
 # 两段都有人声（比如两版配音）：左边播完再播右边，声音不会叠在一起
-sbs side dub-a.mp4 dub-b.mp4 --sequential
+clipcompare side dub-a.mp4 dub-b.mp4 --sequential
 
 # 一批配音版本拼成网格，每段只听前 8 秒，轮流播
 clipcompare grid dub-*.mp4 --sequential --head 8

@@ -265,8 +265,7 @@ def _parser() -> argparse.ArgumentParser:
             "  clipcompare pip  before.mp4 after.mp4 --corner tr\n"
             "  clipcompare grid take-*.mp4 --sequential --head 8\n"
             "  clipcompare grid v3.mp3 v4.mp3 --sequential   # audio becomes a waveform\n"
-            "\n`sbs` is a shorter alias for this command, and `sbs` also works\n"
-            "in place of the `side` mode."
+            "\n`sbs` also works in place of the `side` mode."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -670,13 +669,10 @@ def main(argv: list[str] | None = None) -> int:
     known = set(MODES) | set(MODE_ALIASES)
     if argv and argv[0] not in known and not argv[0].startswith("-"):
         if Path(argv[0]).is_file():
-            # Echo back whichever name was actually typed (clipcompare or sbs),
-            # so the suggested line can be pasted as-is.
-            invoked = Path(sys.argv[0]).name or "clipcompare"
             mode = "side" if len(argv) <= 2 or not Path(argv[2]).is_file() else "grid"
-            hint = shlex.join([invoked, mode, *argv])
+            hint = shlex.join(["clipcompare", mode, *argv])
             print(
-                f"{invoked}: pick a mode ({', '.join(MODES)}). Did you mean:\n  {hint}",
+                f"clipcompare: pick a mode ({', '.join(MODES)}). Did you mean:\n  {hint}",
                 file=sys.stderr,
             )
             return 2
