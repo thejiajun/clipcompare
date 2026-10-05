@@ -15,7 +15,7 @@ from clipcompare.modes.wipe import (
     wipe_expression,
 )
 
-from helpers import clip, graph, sound
+from helpers import clip, graph, sound, waves, renders
 
 
 def opts(**kwargs) -> Options:
@@ -149,6 +149,6 @@ def test_snappy_renders_identically_to_early_because_it_is_an_alias():
 
 
 def test_an_audio_clip_is_drawn_as_its_waveform():
-    body = graph(build(clip(audio=True), sound(), opts()).command)
-    assert "[0:v]" in body
-    assert "[1:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in body
+    plan = build(clip(audio=True), sound(), opts())
+    assert "[0:v]" in graph(plan.command) and "movie=" in graph(plan.command)
+    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in waves(plan)[0]

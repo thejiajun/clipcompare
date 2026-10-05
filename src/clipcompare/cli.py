@@ -15,7 +15,7 @@ import tempfile
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, fonts, info, manifest, media, page, stats
+from . import __version__, cache, fonts, info, manifest, media, page, stats
 from . import prompts as prompts_mod
 from .captions import Fonts as CaptionFonts
 from .filters import AUDIO_CHOICES, FITS, IMAGE_EXTENSIONS, LENGTHS, LOSSLESS, LOSSLESS_EXTENSION, Plan
@@ -141,6 +141,11 @@ def _add_render_arguments(common: argparse._ArgumentGroup) -> None:
         help="print the ffmpeg command instead of running it",
     )
     common.add_argument("--open", action="store_true", help="open the result when done (macOS)")
+    common.add_argument(
+        "--no-cache", action="store_true",
+        help="ignore and do not fill the render cache (~/.cache/clipcompare): probes, metrics, "
+             "prompt and info pictures, waveform panels",
+    )
 
 
 def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
@@ -564,6 +569,7 @@ def _apply_manifest(args: argparse.Namespace) -> None:
 
 def _run(mode: str, args: argparse.Namespace) -> int:
     require_binaries()
+    cache.enabled = not args.no_cache
     if mode == "grid":
         _apply_manifest(args)
     sources: list[Path | str] = (
@@ -671,10 +677,18 @@ def _run(mode: str, args: argparse.Namespace) -> int:
         print(_summary(plan, clips))
         for note in plan.notes:
             print(f"[{plan.mode}] {note}")
+        reused = 0
         for command in plan.pre_commands:
+            hit, digest = cache.fetch_picture(command, work_dir)
+            if hit:
+                reused += 1
+                continue
             result = subprocess.run(command)
             if result.returncode != 0:
                 return result.returncode
+            cache.keep_picture(command, digest)
+        if reused:
+            print(f"[{plan.mode}] cache: reused {reused} of {len(plan.pre_commands)} prepared pictures")
         result = subprocess.run(plan.command)
         if result.returncode != 0:
             return result.returncode

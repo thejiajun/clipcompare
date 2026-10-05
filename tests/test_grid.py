@@ -9,7 +9,7 @@ import pytest
 from clipcompare.modes.grid import Options, build, build_groups, grid_shape, tile_size
 from clipcompare.probe import ProbeError
 
-from helpers import clip, graph, sound
+from helpers import clip, graph, sound, renders, waves
 
 
 def opts(**kwargs) -> Options:
@@ -167,12 +167,14 @@ def test_filtergraph_is_one_connected_chain():
 def test_audio_clips_become_waveform_tiles_filling_a_1080p_row():
     plan = build([sound(name="v3.mp3"), sound(name="v4.mp3")], opts())
     body = graph(plan.command)
+    panel = waves(plan)[0]
     assert (plan.out_w, plan.out_h) == (1920, 1080)
-    # the waveform is a band along the bottom, leaving the top for label and prompt
-    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,showwaves=s=958x324" in body
-    assert "overlay=0:713:shortest=1" in body
-    assert "[1:a]" in body and "[0:v]" not in body and "[1:v]" not in body
-    assert "[wave0]fps=30,scale=958:1080" in body
+    # the waveform is a band along the bottom, leaving the top for label and prompt,
+    # rendered once into a lossless panel the main graph reads back
+    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,showwaves=s=958x324" in panel
+    assert "overlay=0:713:shortest=1" in panel
+    assert len(waves(plan)) == 2 and "[0:v]" not in body and "[1:v]" not in body
+    assert "movie=wave-0-958x1080.mkv[wave0];[wave0]fps=30,scale=958:1080" in body
 
 
 def test_four_audio_clips_share_one_row_and_five_wrap():
@@ -188,8 +190,9 @@ def test_sequential_audio_lines_move_only_in_their_turn_with_a_pause_between():
     body, cmd = graph(plan.command), plan.command
     assert inputs(cmd) == ["a.mp3", "b.mp3"]  # no still reads for a waveform
     # a 0-3, pause, b 3.5-7.5
-    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,apad=whole_dur=7.500,showwaves" in body
-    assert "[1:a]aresample=48000,aformat=channel_layouts=mono,adelay=delays=3500:all=1,apad=whole_dur=7.500" in body
+    a, b = waves(plan)
+    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,apad=whole_dur=7.500,showwaves" in a
+    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,adelay=delays=3500:all=1,apad=whole_dur=7.500" in b
     assert "enable='between(t,3.500,7.500)'" in body
     # the sound carries the pause as silence after a's turn, none after the last
     assert "apad,atrim=0.000:3.500,asetpts" in body
@@ -199,8 +202,8 @@ def test_sequential_audio_lines_move_only_in_their_turn_with_a_pause_between():
 def test_mixed_audio_and_video_tiles_follow_the_video_shape():
     plan = build([clip(audio=True), sound()], opts(sequential=True))
     body = graph(plan.command)
-    assert "[0:v]" in body and "showwaves=s=1080x" in body
-    assert "adelay=delays=3000" in body
+    assert "[0:v]" in body and "showwaves=s=1080x" in waves(plan)[0]
+    assert "adelay=delays=3000" in waves(plan)[0]
 
 
 def test_title_sits_in_a_header_strip_above_the_tiles(tmp_path):
@@ -225,11 +228,12 @@ def test_groups_render_each_run_then_join_them_by_copy(tmp_path):
         ("Kali", "Alia"),
         tmp_path,
     )
-    assert len(plan.pre_commands) == 2
-    assert "kali-v3.mp3" in plan.pre_commands[0] and "alia-v3.mp3" in plan.pre_commands[1]
+    parts = renders(plan)
+    assert len(parts) == 2 and len(waves(plan)) == 4
+    assert "kali-v3.mp3" in parts[0] and "alia-v3.mp3" in parts[1]
     assert (tmp_path / "group-1" / "title.txt").read_text() == "Kali"
     assert (tmp_path / "group-2" / "title.txt").read_text() == "Alia"
-    first, second = (graph(command) for command in plan.pre_commands)
+    first, second = (graph(command) for command in parts)
     # a pause after the first run's last turn, none after the final run's
     assert "apad,atrim=0.000:3.500,asetpts=N/SR/TB[s1]" in first
     assert "apad,atrim=0.000:3.000,asetpts=N/SR/TB[s1]" in second

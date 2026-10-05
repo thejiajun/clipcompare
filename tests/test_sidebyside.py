@@ -9,7 +9,7 @@ import pytest
 from clipcompare.modes.sidebyside import Options, build, panel_size, resolve_layout
 from clipcompare.probe import ProbeError
 
-from helpers import clip, graph, sound
+from helpers import clip, graph, sound, waves
 
 
 
@@ -268,8 +268,8 @@ def test_filtergraph_labels_form_one_connected_chain():
 def test_audio_sides_are_waveform_panels():
     plan = build(sound(name="v3.mp3"), sound(name="v4.mp3"), opts(audio="both"))
     body = graph(plan.command)
-    assert "[0:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in body
-    assert "[1:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in body
+    assert all("[0:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in panel for panel in waves(plan))
+    assert len(waves(plan)) == 2 and "v3.mp3" in plan.pre_commands[0] and "v4.mp3" in plan.pre_commands[1]
     assert "[0:v]" not in body and "[1:v]" not in body
     assert "[0:a][1:a]amix" in body  # the same sound still feeds the mix
 
@@ -278,6 +278,7 @@ def test_sequential_audio_b_waits_flat_and_needs_no_still_read():
     plan = build(sound(duration=3.0, name="a.mp3"), sound(duration=4.0, name="b.mp3"), opts(sequential=True))
     body, cmd = graph(plan.command), plan.command
     assert cmd.count("-i") == 2
-    assert "apad=whole_dur=6.967" in body          # a flat once its turn is over
-    assert "adelay=delays=2967:all=1" in body       # b flat until its turn
+    a, b = waves(plan)
+    assert "apad=whole_dur=6.967" in a          # a flat once its turn is over
+    assert "adelay=delays=2967:all=1" in b       # b flat until its turn
     assert "[s0][s1]concat=n=2:v=0:a=1[aout]" in body

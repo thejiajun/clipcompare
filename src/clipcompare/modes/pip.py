@@ -146,8 +146,12 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     # An audio-only clip's waveform runs flat to the end instead of freezing.
     longest = max(a.duration, b.duration) if opts.length == "longest" else 0.0
     clips = (a, b)
-    wave_main, head_main = picture(main_index, clips[main_index], out_w, out_h, fps, total=longest)
-    wave_inset, head_inset = picture(inset_index, clips[inset_index], inset_w, inset_h, fps, total=longest)
+    wave_main, head_main, render_main = picture(
+        main_index, clips[main_index], out_w, out_h, fps, total=longest, folder=label_dir,
+    )
+    wave_inset, head_inset, render_inset = picture(
+        inset_index, clips[inset_index], inset_w, inset_h, fps, total=longest, folder=label_dir,
+    )
     steps = [
         *wave_main,
         *wave_inset,
@@ -216,7 +220,7 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
 
     work_dir = label_dir or Path(".")
     inputs: list = [str(a.path), str(b.path)]
-    pre_commands = []
+    pre_commands = render_main + render_inset
     for name, width, height, mask_radius in mask_paths:
         path = work_dir / f"pip-mask-{name}.png"
         inputs.append((["-loop", "1"], str(path)))

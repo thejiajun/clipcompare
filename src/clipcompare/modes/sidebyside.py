@@ -46,7 +46,8 @@ class Options(Common):
 
 def sequence_video(
     a: ClipInfo, b: ClipInfo, chains: tuple[str, str], hold_b_at: float, fps_value: float,
-    size: tuple[int, int], fps: str,
+    size: tuple[int, int], fps: str, folder: Path | None = None, pre: list | None = None,
+    head: float | None = None,
 ) -> list[str]:
     """--sequential: A holds its last frame while B plays; while A plays, B shows
     one still taken at `hold_b_at` — past any black lead-in, which a plain
@@ -62,14 +63,17 @@ def sequence_video(
     width, height = size
     chain_a, chain_b = chains
     steps: list[str] = []
+    pre = pre if pre is not None else []
     if a.is_audio:
-        wave, head = picture(0, a, width, height, fps, total=hold + b_turn)
-        steps += [*wave, f"{head}{chain_a}[va]"]
+        wave, start, render = picture(0, a, width, height, fps, total=hold + b_turn, folder=folder, head=head)
+        pre += render
+        steps += [*wave, f"{start}{chain_a}[va]"]
     else:
         steps.append(f"[0:v]{chain_a},tpad=stop_mode=clone:stop_duration={b_turn:.3f}[va]")
     if b.is_audio:
-        wave, head = picture(1, b, width, height, fps, delay=hold)
-        steps += [*wave, f"{head}{chain_b}[vb]"]
+        wave, start, render = picture(1, b, width, height, fps, delay=hold, folder=folder, head=head)
+        pre += render
+        steps += [*wave, f"{start}{chain_b}[vb]"]
     else:
         steps += [
             f"[2:v]{chain_b},trim=end_frame=1,tpad=stop_mode=clone:stop_duration={hold:.3f}[bh]",
@@ -142,8 +146,11 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         chains = tuple(frame_chain(clip, opts.fit, panel_w, panel_h, fps, opts.lossless, pix_fmt) for clip in (a, b))
 
     inputs = [clip_input(a, opts.head), clip_input(b, opts.head)]
+    pre_commands: list[list[str]] = []
     if opts.sequential:
-        steps = sequence_video(a, b, chains, opts.hold_b_at, fps_value, (panel_w, panel_h), fps)
+        steps = sequence_video(
+            a, b, chains, opts.hold_b_at, fps_value, (panel_w, panel_h), fps, label_dir, pre_commands, opts.head,
+        )
         if not b.is_audio:
             inputs.append((["-ss", f"{opts.hold_b_at:.3f}"], str(b.path)))
         shortest = 0
@@ -158,7 +165,10 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         longest = max(a.duration, b.duration) if opts.length == "longest" else 0.0
         steps = []
         for index, (clip, pad, name) in enumerate(((a, pad_a, "va"), (b, pad_b, "vb"))):
-            wave, head = picture(index, clip, panel_w, panel_h, fps, total=longest)
+            wave, head, render = picture(
+                index, clip, panel_w, panel_h, fps, total=longest, folder=label_dir, head=opts.head,
+            )
+            pre_commands += render
             steps += [*wave, f"{head}{chains[index]}{'' if clip.is_audio else pad}[{name}]"]
     steps.append(f"[va][vb]{stack}=inputs=2:shortest={shortest}[st]")
     last = "st"
@@ -226,5 +236,6 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         detail=f"{layout}, {opts.fit}, {'image' if still else 'sequential' if opts.sequential else opts.length}"
                + (f", lossless {opts.lossless} {pix_fmt}" if opts.lossless else ""),
         command=cmd,
+        pre_commands=pre_commands,
         notes=scale_notes([a, b], [(panel_w, panel_h)] * 2, opts.fit, opts.lossless),
     )

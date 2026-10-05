@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from fractions import Fraction
 from pathlib import Path
 
@@ -102,6 +102,12 @@ def parse_lead_in_black(log: str) -> float:
 def lead_in_black(path: Path, window: float = 3.0) -> float:
     """Seconds of black at the very start of a clip — AI renders (lipsync in
     particular) often open on a few black frames. 0.0 when it opens on picture."""
+    from . import cache
+
+    return cache.remember("lead-in", (cache.identity(path), window), lambda: _lead_in_black(path, window))
+
+
+def _lead_in_black(path: Path, window: float) -> float:
     result = subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-t", f"{window}", "-i", str(path),
@@ -115,6 +121,16 @@ def lead_in_black(path: Path, window: float = 3.0) -> float:
 
 
 def probe(path: Path) -> ClipInfo:
+    """The clip as the modes see it; cached by the file's identity."""
+    from . import cache
+
+    if not Path(path).is_file():
+        return _probe(path)
+    stored = cache.remember("probe", (cache.identity(path),), lambda: {**asdict(_probe(path)), "path": str(path)})
+    return ClipInfo(**{**stored, "path": Path(path)})
+
+
+def _probe(path: Path) -> ClipInfo:
     result = subprocess.run(
         [
             "ffprobe", "-v", "error",

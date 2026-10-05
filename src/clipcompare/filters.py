@@ -325,29 +325,38 @@ def encode_args(common: Common, pix_fmt: str = "yuv420p") -> list[str]:
 
 def picture(
     index: int, clip: ClipInfo, width: int, height: int, fps: str,
-    delay: float = 0.0, total: float = 0.0,
-) -> tuple[list[str], str]:
-    """(steps, head) for a clip's picture, where `head` starts the chain that
-    scales it — `[0:v]` for a video. An audio-only clip gets a waveform panel
-    built from its own sound instead, already at width x height. `delay` holds
-    the line flat (silence) for that long first, and `total` keeps it flat
-    after the sound ends until then — so the line moves only while it plays."""
+    delay: float = 0.0, total: float = 0.0, folder: Path | None = None, head: float | None = None,
+) -> tuple[list[str], str, list[list[str]]]:
+    """(steps, head, pre_commands) for a clip's picture, where `head` starts
+    the chain that scales it — `[0:v]` for a video. An audio-only clip's
+    waveform panel, already at width x height, is rendered once by a
+    pre-command into a lossless file in `folder` (so the render cache can
+    keep it) and read back with the movie source. `delay` holds the line flat
+    (silence) for that long first, and `total` keeps it flat after the sound
+    ends until then — so the line moves only while it plays."""
     if not clip.is_audio:
-        return [], f"[{index}:v]"
+        return [], f"[{index}:v]", []
     timing = ""
     if delay > 0:
         timing += f",adelay=delays={round(delay * 1000)}:all=1"
     if total > 0:
         timing += f",apad=whole_dur={total:.3f}"
     top, band = wave_band(height)
-    name = f"wave{index}"
-    return [
+    panel = (folder or Path(".")) / f"wave-{index}-{width}x{height}.mkv"
+    graph = ";".join([
         f"color=c={WAVE_BACKGROUND}:s={width}x{height}:r={fps},"
-        f"drawbox=x=0:y={top + band // 2 - 1}:w={width}:h=2:color={WAVE_BASELINE}:t=fill[{name}bg]",
-        f"[{index}:a]aresample=48000,aformat=channel_layouts=mono{timing},"
-        f"showwaves=s={width}x{band}:mode=cline:scale=sqrt:rate={fps}:colors={WAVE_COLOR}:draw=full[{name}w]",
-        f"[{name}bg][{name}w]overlay=0:{top}:shortest=1,format=yuv420p[{name}]",
-    ], f"[{name}]"
+        f"drawbox=x=0:y={top + band // 2 - 1}:w={width}:h=2:color={WAVE_BASELINE}:t=fill[bg]",
+        f"[0:a]aresample=48000,aformat=channel_layouts=mono{timing},"
+        f"showwaves=s={width}x{band}:mode=cline:scale=sqrt:rate={fps}:colors={WAVE_COLOR}:draw=full[w]",
+        f"[bg][w]overlay=0:{top}:shortest=1,format=yuv420p[wave]",
+    ])
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        *(["-t", f"{head:.3f}"] if head else []), "-i", str(clip.path),
+        "-filter_complex", graph, "-map", "[wave]", "-an", "-c:v", "ffv1", str(panel),
+    ]
+    name = f"wave{index}"
+    return [f"movie={escape(str(panel))}[{name}]"], f"[{name}]", [command]
 
 
 # An input is either a path, or per-input flags plus a path (e.g. -loop 1).

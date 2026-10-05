@@ -126,8 +126,8 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     stroke_px = max(round(opts.stroke * out_h / 1080), 1)
     expr = wipe_expression(opts.direction, stroke_px / 2.0, _WHITE_10 if "10" in pix_fmt else _WHITE)
 
-    wave_a, head_a = picture(0, a, out_w, out_h, fps)
-    wave_b, head_b = picture(1, b, out_w, out_h, fps)
+    wave_a, head_a, render_a = picture(0, a, out_w, out_h, fps, folder=label_dir)
+    wave_b, head_b, render_b = picture(1, b, out_w, out_h, fps, folder=label_dir)
     steps = [
         *wave_a,
         *wave_b,
@@ -184,5 +184,6 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
             + (f", lossless {opts.lossless} {pix_fmt}" if opts.lossless else "")
         ),
         command=cmd,
+        pre_commands=render_a + render_b,
         notes=scale_notes([a, b], [(out_w, out_h)] * 2, opts.fit, opts.lossless),
     )

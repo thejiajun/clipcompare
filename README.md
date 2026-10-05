@@ -165,6 +165,18 @@ clipcompare grid --manifest clips.json          # manifest 里写 "stats": true 
 - **baseline**：manifest 里 `"baseline": true`，或命令行 `--baseline N`（配合 `--group` 时是每组的第 N 段）。没有 baseline 时不标紫、不算相似度，但「相同的写一次」照样成立。
 - **给 agent 读的数字**：`--stats` 同时在输出旁边写一个 `<输出文件名>.stats.json`（只出网页时写在网页旁边），里面是每段的 recipe、ffprobe 量到的原始数字、跟 baseline 的比较结果和格子上显示的文字。不用解析画面就能拿到数字。
 
+## 渲染缓存
+
+同样的输入、同样的参数再渲染一次，能复用的都会复用，放在 `~/.cache/clipcompare/`（有 `$XDG_CACHE_HOME` 就放那下面）：
+
+- ffprobe 的结果、开头黑帧的扫描、`--stats` 的测量和跟 baseline 的 SSIM / PSNR / SNR；
+- 每个（片段，段落）的提示词 PNG、recipe / measured 的 PNG、`pip` 的圆角遮罩；
+- 纯音频片段的波形面板（先单独渲成无损的 FFV1 `.mkv`，正片再读进来）。
+
+每一块都按「它是用什么做出来的」算 key：输入文件按路径 + 大小 + 修改时间（URL 片段已经下载在 `media/` 缓存里，同样按那个文件算），文字按内容，再加上影响这一块的所有参数和工具版本。文件改了、换了、`touch` 过都会重新算。**成片本身从不缓存**，每次都重新编码。终端会说一句 `cache: reused 32 of 34 prepared pictures`。`--no-cache` 不读也不写缓存。
+
+实测（M 系列 Mac）：「提示词对比」那个 manifest（8 段音频、两组、成片 495 秒）第一次 82.5 秒，第二次 68.8 秒，剩下的时间都花在成片编码上；三段 720p 视频加 `--stats` 的网格从 12.0 秒到 10.0 秒。缓存不会自动清理，占地方了直接删 `~/.cache/clipcompare/` 即可（波形面板最大，8 段长音频约 150 MB）。
+
 ## 安装
 
 ```bash
@@ -229,6 +241,7 @@ brew install ffmpeg
 | `--crf N` / `--preset NAME` | x264 画质档位，默认 `18` / `medium`（`--preset` 也用于 `--lossless hevc`） |
 | `--lossless [hevc\|prores]` | 不重新压缩画质、不缩放片段，输出 `.mov` + PCM 声音，见「不再压一遍画质」 |
 | `-n, --dry-run` | 只打印 ffmpeg 命令（打印出来的可以直接粘贴执行） |
+| `--no-cache` | 不用渲染缓存，见「渲染缓存」 |
 | `--open` | 渲染完直接打开（macOS） |
 
 ## 各模式专有参数
@@ -407,7 +420,7 @@ uv tool install --force .
 
 构建后端是 hatchling，它不产生增量的 `build/` 目录 —— setuptools 的那个会把源码里已删除的文件继续打进 wheel。改完代码若发现装进去的还是旧的，用 `uv tool install --reinstall .`，`--force` 在版本号不变时会复用缓存的 wheel。
 
-每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试，200 多个测试跑完不到半秒（网页里的换算逻辑用 node 跑，没装 node 时跳过）。
+每个模式的 `build()` 都是纯函数：进两个 `ClipInfo` 加一组选项，出 ffmpeg 的 argv。所以滤镜图能脱离 ffmpeg 测试；250 多个测试几秒跑完，其中少数真的调用 ffmpeg（无损像素比对、`--stats`、缓存），网页里的换算逻辑用 node 跑，没装 node 时跳过。测试用各自的临时缓存目录，不碰 `~/.cache`。
 
 ## 已知边界
 

@@ -8,7 +8,7 @@ from clipcompare import captions, prompts
 from clipcompare.modes.grid import Options, build, build_groups
 from clipcompare.prompts import Segment, Token
 
-from helpers import graph, sound
+from helpers import graph, sound, renders
 
 BUNDLED = Path(__file__).resolve().parents[1] / "src" / "clipcompare" / "assets" / "TikTokSans-Medium.ttf"
 FONTS = captions.Fonts(body=BUNDLED, tag=BUNDLED)
@@ -148,7 +148,7 @@ def test_the_playing_tile_shows_each_segment_in_its_span_and_every_tile_its_summ
     assert "enable='between(t,0.000,3.000)'" in body    # a: one untimed segment, its whole turn
     assert (tmp_path / "summary-0.txt").read_text() == "baseline"
     assert (tmp_path / "summary-1.txt").read_text() == "+1 tag"
-    assert len(plan.pre_commands) == 3 and plan.caption_size
+    assert len(renders(plan)) == 3 and plan.caption_size
 
 
 def test_groups_share_one_prompt_size(tmp_path):

@@ -40,6 +40,12 @@ def _rate(value: str | None) -> float | None:
 
 def measure(path: Path) -> dict:
     """Resolution, rate, length, codecs, bitrate and size of one clip."""
+    from . import cache
+
+    return cache.remember("measure", (cache.identity(path),), lambda: _measure(path))
+
+
+def _measure(path: Path) -> dict:
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
         capture_output=True, text=True,
@@ -103,6 +109,21 @@ def _db(text: str) -> float:
 
 
 def compare(path: Path, measured: dict, baseline: Path, reference: dict) -> dict:
+    """compare_uncached, cached by both files' identities."""
+    from . import cache
+
+    value = cache.remember(
+        "compare", (cache.identity(path), cache.identity(baseline)),
+        lambda: _json_safe(compare_uncached(path, measured, baseline, reference)),
+    )
+    return {key: float("inf") if item == "inf" else item for key, item in value.items()}
+
+
+def _json_safe(value: dict) -> dict:
+    return {key: "inf" if item == float("inf") else item for key, item in value.items()}
+
+
+def compare_uncached(path: Path, measured: dict, baseline: Path, reference: dict) -> dict:
     """SSIM and PSNR of a clip's picture against the baseline's (scaled to the
     baseline's size when they differ, and `scaled_to` says so), and the SNR of
     its sound when both are the same take. Keys are left out when they do not

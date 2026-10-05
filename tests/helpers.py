@@ -38,6 +38,16 @@ def graph(command: list[str]) -> str:
     return command[command.index("-filter_complex") + 1]
 
 
+def waves(plan) -> list[str]:
+    """The filtergraphs of the pre-commands that render waveform panels, in order."""
+    return [graph(command) for command in plan.pre_commands if command[-1].endswith(".mkv")]
+
+
+def renders(plan) -> list[list[str]]:
+    """Pre-commands other than waveform panels."""
+    return [command for command in plan.pre_commands if not command[-1].endswith(".mkv")]
+
+
 def image(width=720, height=720, name="still.png"):
     """A still image, shaped the way probe reports one."""
     return ClipInfo(

@@ -177,14 +177,19 @@ def grid_fps(clips: list[ClipInfo], override: str | None) -> tuple[str, float]:
 
 def together_tiles(
     clips: list[ClipInfo], chains: list[str], length: str, size: tuple[int, int], fps: str,
+    folder: Path | None = None, pre: list | None = None, head: float | None = None,
 ) -> list[str]:
     longest = max(clip.duration for clip in clips)
     steps = []
     for index, (clip, chain) in enumerate(zip(clips, chains)):
         if clip.is_audio:
             # A waveform runs flat to the end rather than freezing mid-swing.
-            wave, head = picture(index, clip, *size, fps, total=longest if length == "longest" else 0.0)
-            steps += [*wave, f"{head}{chain}[t{index}]"]
+            wave, start, render = picture(
+                index, clip, *size, fps, total=longest if length == "longest" else 0.0, folder=folder, head=head,
+            )
+            if pre is not None:
+                pre += render
+            steps += [*wave, f"{start}{chain}[t{index}]"]
             continue
         pad = ""
         if length == "longest" and clip.duration and longest - clip.duration > LENGTH_EPSILON:
@@ -203,7 +208,7 @@ def turn_starts(clips: list[ClipInfo], holds: tuple[float, ...], pause: float, t
 
 def sequence_tiles(
     clips: list[ClipInfo], chains: list[str], opts: Options, holds: tuple[float, ...], fps_value: float,
-    size: tuple[int, int], fps: str,
+    size: tuple[int, int], fps: str, folder: Path | None = None, pre: list | None = None,
 ) -> tuple[list[str], list[Input], list[tuple[float, float]]]:
     """Per-tile video for --sequential, the extra still inputs it reads, and each
     clip's turn as (start, end) on the output timeline."""
@@ -217,8 +222,12 @@ def sequence_tiles(
     for index, (clip, hold, chain) in enumerate(zip(clips, holds, chains)):
         if clip.is_audio:
             # No still needed: the line is flat before and after its own turn.
-            wave, head = picture(index, clip, *size, fps, delay=starts[index], total=total)
-            steps += [*wave, f"{head}{chain}[t{index}]"]
+            wave, start, render = picture(
+                index, clip, *size, fps, delay=starts[index], total=total, folder=folder, head=opts.head,
+            )
+            if pre is not None:
+                pre += render
+            steps += [*wave, f"{start}{chain}[t{index}]"]
             continue
         after = total - starts[index] - lengths[index]
         tail = f",tpad=stop_mode=clone:stop_duration={after:.3f}" if after > LENGTH_EPSILON else ""
@@ -330,12 +339,15 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     holds = opts.holds or (0.0,) * count
 
     turns: list[tuple[float, float]] = []
+    waves: list[list[str]] = []
     if opts.sequential:
-        steps, stills, turns = sequence_tiles(clips, chains, opts, holds, fps_value, (tile_w, tile_h), fps)
+        steps, stills, turns = sequence_tiles(
+            clips, chains, opts, holds, fps_value, (tile_w, tile_h), fps, label_dir, waves,
+        )
         inputs += stills
         shortest = 0
     else:
-        steps = together_tiles(clips, chains, opts.length, (tile_w, tile_h), fps)
+        steps = together_tiles(clips, chains, opts.length, (tile_w, tile_h), fps, label_dir, waves, opts.head)
         shortest = 1 if opts.length == "shortest" and not still else 0
 
     layout = "|".join(f"{x}_{y}" for x, y in cells)
@@ -358,7 +370,7 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         last = "hl"
 
     metrics = LabelMetrics.for_reference(short)
-    pre_commands: list[list[str]] = []
+    pre_commands: list[list[str]] = list(waves)
     caption_size = 0
     painted = info_pictures(run_info, opts, label_dir, (tile_w, tile_h), metrics) if run_info else []
     reserved = [(top.height if top else 0, bottom.height if bottom else 0) for top, bottom in painted]
