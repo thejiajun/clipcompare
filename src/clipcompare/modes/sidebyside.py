@@ -29,7 +29,10 @@ from ..filters import (
     still_chain,
     write_label_files,
 )
+from .. import info as info_mod
+from .. import layers
 from ..probe import ClipInfo, ProbeError
+from ..tokens import DS_BLACK
 
 LAYOUTS = ("auto", "lr", "tb")
 
@@ -42,6 +45,8 @@ class Options(Common):
     divider: int = 4       # 1080-normalised px, 0 disables
     sequential: bool = False  # A plays through, then B; the idle side holds its frame
     hold_b_at: float = 0.0    # --sequential: the moment of B shown while A plays
+    info: info_mod.Run | None = None   # --stats: measured strips and the shared title bar
+    info_font: Path | None = None
 
 
 def sequence_video(
@@ -173,6 +178,17 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     steps.append(f"[va][vb]{stack}=inputs=2:shortest={shortest}[st]")
     last = "st"
 
+    # The info layer, drawn the way grid draws its tiles: a strip along each
+    # panel's bottom, and what both share once in a title bar above them.
+    metrics = LabelMetrics.for_reference(opts.panel)
+    run_info = opts.info if opts.info and opts.info_font and label_dir is not None else None
+    if run_info:
+        spots = [(0, 0), (panel_w, 0) if layout == "lr" else (0, panel_h)]
+        painted = layers.pictures(run_info, opts.info_font, opts.label_bg, label_dir, panel_w, metrics)
+        last = layers.overlay(
+            painted, spots, panel_h, metrics, steps, inputs, pre_commands, last, still, fps, opts.lossless,
+        )
+
     if opts.divider > 0:
         thickness = max(round(opts.divider * opts.panel / 1080), 1)
         if layout == "lr":
@@ -190,7 +206,6 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
 
     if opts.labels and label_dir is not None:
         assert opts.fonts is not None
-        metrics = LabelMetrics.for_reference(opts.panel)
         file_a, file_b = write_label_files(opts.labels, label_dir)
         x_a, y_a = metrics.inset + metrics.pad_h, metrics.inset + metrics.pad_v
         if layout == "lr":
@@ -203,6 +218,16 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         ])
         steps.append(f"[{last}]{labels}[lv]")
         last = "lv"
+
+    if run_info and run_info.shared_text:
+        assert opts.info_font
+        band = layers.shared_px(min(out_w, out_h))
+        steps.append(f"[{last}]pad={out_w}:{out_h + band}:0:{band}:color={DS_BLACK}[hd]")
+        step, last = layers.shared_line(
+            "hd", run_info.shared_text, opts.info_font, band, 0, out_w, label_dir, metrics.inset,
+        )
+        steps.append(step)
+        out_h += band
 
     if still:
         audio = "none"

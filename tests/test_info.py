@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from clipcompare import cli, info, manifest, stats
+from clipcompare import cli, info, layers, manifest, stats
 from clipcompare.modes import grid
 
 from helpers import clip, graph
@@ -113,7 +113,7 @@ def test_grid_paints_recipe_and_measured_strips_and_a_shared_line(tmp_path):
     body = graph(plan.command)
     assert "shared.txt" in body and (tmp_path / "shared.txt").read_text().startswith("m · ")
     assert sum(cmd[-1].endswith(("recipe-0.png", "recipe-1.png", "measured-0.png", "measured-1.png")) for cmd in plan.pre_commands) == 4
-    assert plan.out_h == plain.out_h + grid.shared_px(min(plain.out_w, plain.out_h))
+    assert plan.out_h == plain.out_h + layers.shared_px(min(plain.out_w, plain.out_h))
 
 
 def test_tabular_digits_share_one_advance():
@@ -138,3 +138,65 @@ def test_stats_end_to_end_writes_the_sidecar(tmp_path):
     assert other["measured"]["video_bitrate"] < group["clips"][0]["measured"]["video_bitrate"]
     assert 0 < other["vs_baseline"]["ssim"] < 1 and other["vs_baseline"]["psnr"] > 10
     assert other["tile"]["similarity"][0]["key"] == "ssim"
+
+
+def _side_run():
+    return info.describe([None, None], [measured(), measured(bitrate=5_100_000)], [None, {"ssim": 0.99, "psnr": 45.0}], 0)
+
+
+@pytest.mark.parametrize("layout,second", [("lr", "overlay=1080:"), ("tb", "overlay=0:")])
+def test_side_draws_a_strip_per_panel_and_a_shared_title_bar(tmp_path, layout, second):
+    from clipcompare.modes import sidebyside
+
+    plain = sidebyside.build(clip(), clip(), sidebyside.Options(out=tmp_path / "o.mp4", layout=layout), tmp_path)
+    plan = sidebyside.build(
+        clip(), clip(), sidebyside.Options(out=tmp_path / "o.mp4", layout=layout, info=_side_run(), info_font=FONT), tmp_path,
+    )
+    body = graph(plan.command)
+    band = layers.shared_px(min(plain.out_w, plain.out_h))
+    assert plan.out_h == plain.out_h + band and f"pad={plain.out_w}:{plain.out_h + band}:0:{band}" in body
+    assert (tmp_path / "shared.txt").read_text().startswith("720×1280")
+    assert [cmd[-1].rsplit("/", 1)[-1] for cmd in plan.pre_commands] == ["measured-0.png", "measured-1.png"]
+    assert second in body
+    # The strips go under the divider and the labels, the title bar last.
+    assert body.index("overlay=") < body.index("drawbox") < body.index("pad=")
+
+
+def test_side_baseline_is_a_or_b():
+    args = cli._parser().parse_args(["side", "a.mp4", "b.mp4", "--stats", "--baseline", "b"])
+    assert args.stats and args.baseline == "b"
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(["side", "a.mp4", "b.mp4", "--baseline", "2"])
+
+
+@pytest.mark.parametrize("extra", [["--sequential"], ["--lossless"], []])
+def test_side_stats_end_to_end(tmp_path, extra):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    encoders = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    if "--lossless" in extra and "libx265" not in encoders:
+        pytest.skip("needs libx265")
+    for name, crf in (("a.mp4", 10), ("b.mp4", 40)):
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=1",
+                        "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p", str(tmp_path / name)], check=True)
+    out = tmp_path / ("o.mov" if "--lossless" in extra else "o.mp4")
+    assert cli.main(["side", str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4"), "--stats", "--baseline", "a",
+                     *extra, "-o", str(out)]) == 0
+    group = json.loads(out.with_name(out.name + ".stats.json").read_text())["groups"][0]
+    assert group["baseline"] == 0 and group["clips"][1]["vs_baseline"]["ssim"] < 1
+    assert "320×240" in group["shared"]
+
+
+def test_side_stats_on_two_images(tmp_path):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    for name, color in (("a.png", "red"), ("b.png", "blue")):
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"color={color}:s=320x240",
+                        "-frames:v", "1", str(tmp_path / name)], check=True)
+    out = tmp_path / "o.png"
+    assert cli.main(["side", str(tmp_path / "a.png"), str(tmp_path / "b.png"), "--stats", "--baseline", "b", "-o", str(out)]) == 0
+    group = json.loads((tmp_path / "o.png.stats.json").read_text())["groups"][0]
+    assert group["baseline"] == 1 and group["clips"][0]["measured"]["kind"] == "image"
+    from clipcompare.probe import probe
+
+    assert probe(out).height > 240   # the title bar sits above the panels

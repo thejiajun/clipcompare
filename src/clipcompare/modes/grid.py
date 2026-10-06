@@ -41,6 +41,7 @@ from pathlib import Path
 
 from .. import captions as captions_mod
 from .. import info as info_mod
+from .. import layers
 from .. import prompts as prompts_mod
 from ..filters import (
     LENGTH_EPSILON,
@@ -79,8 +80,6 @@ AUDIO_ROW = 4                # ...and up to this many of them sit in one row
 IMAGE_ROW = 4                # images too: up to this many sit side by side in one row
 AUDIO_MODES = ("auto", "none", "mix")
 HEADER = 0.1             # --title strip height, as a share of the canvas's short edge
-SHARED = 0.05            # ...and the shared-info line's under it (or alone)
-MEASURED = 0.7           # measured strip text size, as a share of the label's
 SUMMARY = 0.8            # diff summary size, as a share of the label's
 
 
@@ -121,13 +120,9 @@ def header_px(short: int) -> int:
     return even(round(short * HEADER))
 
 
-def shared_px(short: int) -> int:
-    return even(round(short * SHARED))
-
-
 def header_height(short: int, title: bool, shared: bool) -> int:
     """The title bar: the --title band, the shared-info band under it, or both."""
-    return (header_px(short) if title else 0) + (shared_px(short) if shared else 0)
+    return (header_px(short) if title else 0) + (layers.shared_px(short) if shared else 0)
 
 
 def audio_tiles(
@@ -318,7 +313,7 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     header = shared_band = 0
     if titled or shared_text:
         reference = AUDIO_CANVAS[1] if all_audio and not opts.panel else min(grid_w, grid_h)
-        shared_band = shared_px(reference) if shared_text else 0
+        shared_band = layers.shared_px(reference) if shared_text else 0
         header = (
             AUDIO_CANVAS[1] - grid_h if all_audio and not opts.panel
             else header_height(reference, titled, bool(shared_text))
@@ -372,7 +367,9 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     metrics = LabelMetrics.for_reference(short)
     pre_commands: list[list[str]] = list(waves)
     caption_size = 0
-    painted = info_pictures(run_info, opts, label_dir, (tile_w, tile_h), metrics) if run_info else []
+    painted = (
+        layers.pictures(run_info, opts.info_font, opts.label_bg, label_dir, tile_w, metrics) if run_info else []
+    )
     reserved = [(top.height if top else 0, bottom.height if bottom else 0) for top, bottom in painted]
     if opts.prompts and any(opts.prompts) and opts.caption_fonts and label_dir is not None:
         last, caption_size = prompt_steps(
@@ -381,28 +378,9 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
             turns or [(0.0, clip.duration) for clip in clips], holds, fps,
             steps, inputs, pre_commands, last, still, reserved,
         )
-    for index, ((top, bottom), (x, y)) in enumerate(zip(painted, spots)):
-        # The recipe sits under the label, the measured strip along the bottom.
-        label_bottom = metrics.inset + metrics.size + 2 * metrics.pad_v
-        for name, picture_, at in (
-            ("r", top, (x + metrics.inset, y + label_bottom + metrics.inset // 2)),
-            ("m", bottom, (x, y + tile_h - (bottom.height if bottom else 0))),
-        ):
-            if picture_ is None:
-                continue
-            pre_commands.append(picture_.command)
-            source = len(inputs)
-            image = picture_.command[-1]
-            if still:
-                inputs.append(image)
-                steps.append(f"[{last}][{source}:v]overlay={at[0]}:{at[1]}:format=rgb[i{name}{index}]")
-            else:
-                inputs.append((["-loop", "1", "-framerate", fps], image))
-                steps.append(
-                    f"[{last}][{source}:v]overlay={at[0]}:{at[1]}:shortest=1"
-                    f"{':format=auto' if opts.lossless else ''}[i{name}{index}]"
-                )
-            last = f"i{name}{index}"
+    last = layers.overlay(
+        painted, spots, tile_h, metrics, steps, inputs, pre_commands, last, still, fps, opts.lossless,
+    )
 
     if opts.labels and label_dir is not None:
         assert opts.fonts is not None
@@ -432,19 +410,11 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     if header and shared_text:
         # What every clip shares, said once.
         assert opts.info_font
-        size = max(round(shared_band * 0.45), 8)
-        shared_file = label_dir / "shared.txt"
-        shared_file.write_text(
-            captions_mod.ellipsize_text(shared_text, out_w - 2 * metrics.inset, size, opts.info_font),
-            encoding="utf-8",
-        )
         top = header - shared_band - (metrics.inset // 3 if titled else 0)
-        steps.append(
-            f"[{last}]drawtext=textfile={escape(str(shared_file))}:fontfile={escape(str(opts.info_font))}"
-            f":fontsize={size}:expansion=none:fontcolor={DS_TEXT_SECONDARY_DARK}"
-            f":y_align=font:x=(w-tw)/2:y={top + (shared_band - size) // 2}[sh]"
+        step, last = layers.shared_line(
+            last, shared_text, opts.info_font, shared_band, top, out_w, label_dir, metrics.inset,
         )
-        last = "sh"
+        steps.append(step)
 
     if still:
         audio, audio_steps, output = "none", [], still_args(opts.out)
@@ -474,40 +444,6 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         caption_size=caption_size,
         notes=scale_notes(clips, [(tile_w, tile_h)] * count, opts.fit, opts.lossless),
     )
-
-
-def info_pictures(
-    run: info_mod.Run, opts: Options, label_dir: Path, tile: tuple[int, int], metrics: LabelMetrics,
-) -> list[tuple[info_mod.Painted | None, info_mod.Painted | None]]:
-    """Per tile, the recipe line (a chip under the label) and the measured
-    strip (along the bottom), each painted once into a PNG."""
-    assert opts.info_font
-    tile_w, _ = tile
-    font = opts.info_font
-    recipe_size = max(round(metrics.size * SUMMARY), 8)
-    measured_size = max(round(metrics.size * MEASURED), 8)
-    pad_v, pad_h = max(metrics.pad_v // 2, 2), max(metrics.pad_h // 2, 4)
-    out = []
-    for index, tile_info in enumerate(run.tiles):
-        top = bottom = None
-        spans = info_mod.recipe_spans(tile_info)
-        if spans:
-            line = info_mod.fit_line(spans, tile_w - 2 * metrics.inset - 2 * pad_h, font, recipe_size)
-            top = info_mod.paint(
-                [line], font, recipe_size, label_dir / f"recipe-{index}.png", label_dir,
-                background=opts.label_bg, pad_v=pad_v, pad_h=pad_h,
-            )
-        lines = [
-            info_mod.fit_line(line, tile_w - 2 * metrics.inset, font, measured_size)
-            for line in info_mod.measured_lines(tile_info)
-        ]
-        if lines:
-            bottom = info_mod.paint(
-                lines, font, measured_size, label_dir / f"measured-{index}.png", label_dir,
-                width=tile_w, background=opts.label_bg, pad_v=pad_v, pad_h=metrics.inset,
-            )
-        out.append((top, bottom))
-    return out
 
 
 def prompt_region(

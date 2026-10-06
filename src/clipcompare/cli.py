@@ -306,6 +306,15 @@ def _parser() -> argparse.ArgumentParser:
     _add_shared_arguments(side)
     group = side.add_argument_group("side-by-side")
     group.add_argument(
+        "--stats", action="store_true",
+        help="measure both clips (resolution, bitrate, rate, length, codecs, size; SSIM / PSNR / SNR "
+             "against the baseline) into a strip along each panel, and into <out>.stats.json",
+    )
+    group.add_argument(
+        "--baseline", choices=("a", "b"),
+        help="the clip the other is compared against (percentages, SSIM / PSNR); default none",
+    )
+    group.add_argument(
         "--layout", choices=sidebyside.LAYOUTS, default="auto",
         help="auto (default: portrait/square -> lr, landscape -> tb), lr, or tb",
     )
@@ -468,6 +477,7 @@ def _make_plan(mode: str, args, clips: list[ClipInfo], out, label_fonts, label_d
             **shared, layout=args.layout, panel=args.panel,
             length=args.length, divider=args.divider, sequential=args.sequential,
             hold_b_at=_hold(b) if args.sequential and not args._still else 0.0,
+            info=args._infos[0] if args._infos else None, info_font=args._info_font,
         )
         return sidebyside.build(a, b, opts, label_dir)
     if mode == "wipe":
@@ -599,19 +609,25 @@ def _run(mode: str, args: argparse.Namespace) -> int:
 
     clips = [probe(path) for path in paths]
     args._still = _check_images(mode, args, clips, args.out)
-    if mode == "grid":
-        args._prompts = (
-            prompts_mod.prepare(args._captions, args._baselines, args._segments, args.group)
-            if args._captions else ()
-        )
-        args._report = _measure(args, paths, names) if args.stats or args._recipes else None
+    if mode == "side":
+        # side has no manifest: no recipe, the baseline is a or b.
+        args.group, args._recipes = 0, ()
+        args._baselines = (args.baseline == "a", args.baseline == "b") if args.baseline else ()
+    args._report = args._infos = None
+    if mode in ("grid", "side"):
+        args._report = _measure(args, sources, paths, names) if args.stats or args._recipes else None
         args._infos = tuple(run["info"] for run in args._report) if args._report else ()
         if args._report and args.stats:
             for run in args._report:
                 for clip in run["clips"]:
                     scaled = (clip.get("vs_baseline") or {}).get("scaled_to")
                     if scaled:
-                        print(f"[grid] stats: {clip['label']} is compared with the baseline scaled to {scaled}")
+                        print(f"[{mode}] stats: {clip['label']} is compared with the baseline scaled to {scaled}")
+    if mode == "grid":
+        args._prompts = (
+            prompts_mod.prepare(args._captions, args._baselines, args._segments, args.group)
+            if args._captions else ()
+        )
         if args.html is not None:
             labels = _labels(args, names) or tuple(_label_from_path(path) for path in names)
             page.write(args.html, page.build(
@@ -695,14 +711,14 @@ def _run(mode: str, args: argparse.Namespace) -> int:
     size_mb = out.stat().st_size / 1_000_000
     shape = f"{written.width}x{written.height}" if args._still else f"{written.duration:.1f}s"
     print(f"[{plan.mode}] done: {out}  ({shape}, {size_mb:.1f} MB)")
-    if mode == "grid":
-        _write_report(args, out)
+    if mode in ("grid", "side"):
+        _write_report(args, out, mode)
     if args.open and sys.platform == "darwin":
         subprocess.run(["open", str(out)], check=False)
     return 0
 
 
-def _measure(args: argparse.Namespace, paths: list[Path], names: list[Path]) -> list[dict]:
+def _measure(args: argparse.Namespace, sources: list, paths: list[Path], names: list[Path]) -> list[dict]:
     """Per run (each --group, or all clips): every clip's recipe, and with
     --stats what ffprobe and the baseline comparison measured, plus the
     display model (info.Run) the tiles and the page draw."""
@@ -710,7 +726,7 @@ def _measure(args: argparse.Namespace, paths: list[Path], names: list[Path]) -> 
     size = args.group or count
     recipes = list(args._recipes) or [None] * count
     baselines = list(args._baselines) or [False] * count
-    sources = [str(clip) for clip in args.clips]
+    sources = [str(source) for source in sources]
     labels = _labels(args, names) or tuple(_label_from_path(path) for path in names)
     measures = [stats.measure(path) for path in paths] if args.stats else [None] * count
     runs = []
@@ -751,11 +767,11 @@ def _finite(value):
     return value
 
 
-def _write_report(args: argparse.Namespace, out: Path) -> None:
+def _write_report(args: argparse.Namespace, out: Path, mode: str = "grid") -> None:
     """--stats: what was measured, next to the output, for agents to read."""
     if not (args.stats and args._report):
         return
-    titles = _titles(args, len(args.clips))
+    titles = _titles(args, sum(len(run["clips"]) for run in args._report))
     report = {
         "clipcompare": __version__,
         "output": out.name,
@@ -774,7 +790,7 @@ def _write_report(args: argparse.Namespace, out: Path) -> None:
     }
     path = out.with_name(out.name + ".stats.json")
     path.write_text(json.dumps(_finite(report), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"[grid] stats: {path}")
+    print(f"[{mode}] stats: {path}")
 
 
 def _page_sources(sources: list, paths: list[Path], html: Path, copy: bool) -> list[str]:

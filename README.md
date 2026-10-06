@@ -143,7 +143,10 @@ clipcompare grid --manifest megan-project/clips.json --html megan-project/compar
 ```bash
 clipcompare grid raw.mp4 old-fit.mp4 new-fit.mp4 --stats --baseline 1
 clipcompare grid --manifest clips.json          # manifest 里写 "stats": true 也行
+clipcompare side raw.mp4 old-fit.mp4 --stats --baseline a
 ```
+
+`grid` 和 `side` 用同一套画法。`side` 没有 manifest，所以没有 recipe 那层；`--baseline` 写 `a` 或 `b`，不写就是没有 baseline。图片、`--sequential`、`--lossless` 都能一起用。`side` 平时没有标题条，加 `--stats` 时两块画面上方会多出一条，写两段共有的信息。
 
 每格从上到下四层：
 
@@ -162,7 +165,7 @@ clipcompare grid --manifest clips.json          # manifest 里写 "stats": true 
 
 三级文字：名字是主文字（Telka Medium、`--ds-eggshell`），recipe 是二级（小一号，Telka Regular），measured 是三级（再小一号，`--ds-text-secondary`）。
 
-- **baseline**：manifest 里 `"baseline": true`，或命令行 `--baseline N`（配合 `--group` 时是每组的第 N 段）。没有 baseline 时不标紫、不算相似度，但「相同的写一次」照样成立。
+- **baseline**：manifest 里 `"baseline": true`，或命令行 `--baseline N`（配合 `--group` 时是每组的第 N 段；`side` 写 `a` / `b`）。没有 baseline 时不标紫、不算相似度，但「相同的写一次」照样成立。
 - **给 agent 读的数字**：`--stats` 同时在输出旁边写一个 `<输出文件名>.stats.json`（只出网页时写在网页旁边），里面是每段的 recipe、ffprobe 量到的原始数字、跟 baseline 的比较结果和格子上显示的文字。不用解析画面就能拿到数字。
 
 ## 渲染缓存
@@ -255,6 +258,8 @@ brew install ffmpeg
 | `--length shortest\|longest` | `longest` 把较短那段的最后一帧冻住补齐 |
 | `--divider PX` | 中缝分隔线粗细，默认 4，`0` 关闭。线是叠加绘制的，输出尺寸不变，调粗会盖住两侧画面各一半线宽 |
 | `--head SEC` | 每段只取前 SEC 秒：同时播放时成片就是前 SEC 秒；配合 `--sequential` 时每段轮到时只播前 SEC 秒 |
+| `--stats` | 量两段的技术参数，画在每块画面底部，共同的写在上方标题条里，另写 `.stats.json`，见「技术信息」 |
+| `--baseline a\|b` | 哪一段是 baseline（百分比、SSIM / PSNR 都跟它比），默认没有 |
 | `--sequential` | 轮流播放：A 先播完，B 再播。等待的一侧停在画面上（B 停在第一个有画面的帧 —— 自动跳过开头的黑帧，AI 生成的视频常见；A 播完停在最后一帧），声音跟着正在播的那一侧走；成片时长 = 两段相加。`--audio none` 静音，`--length` 不起作用 |
 
 ### wipe
@@ -430,7 +435,7 @@ uv tool install --force .
 - 纯音频片段的波形面板只在 `grid` 里会自动铺满 16:9；`side` 两段音频出 2160×1080，`wipe` / `pip` 能用但意义不大。`--pause` 目前只有 `grid` 有。
 - 提示词排版忽略字距调整（kerning），一行最多偏几个像素；字号 15px 还放不下的段落会被截断，完整内容看网页。
 - `--group` 先把每组单独渲染、再不重编码地拼起来，所以每组的格数、尺寸都相同；某一组完全没有声音时拼接会出错。
-- `--stats`、`--baseline` 和 recipe 只在 `grid` 里有；两段对比想看技术信息就用 `grid a.mp4 b.mp4`（画面也是并排一行）。
+- `--stats`、`--baseline` 只在 `grid` 和 `side` 里有，recipe 只在 `grid`（要 manifest）；`wipe` / `pip` 没有。
 - `side` / `wipe` / `pip` 只吃两段；三段以上用 `grid`。`grid` 的片段越多，ffmpeg 同时解码的路数越多，渲染越慢。
 
 ## License
