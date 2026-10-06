@@ -42,7 +42,7 @@ from ..filters import (
 from ..probe import ClipInfo
 
 DIRECTIONS = ("lr", "rl", "tb", "bt")
-PACES = ("early", "balanced", "late", "snappy")
+PACES = ("early", "balanced", "late")
 
 # Measured off the launch reference cuts: a short hold, a quick wipe, then a
 # long hold on the result. 0.35s is the house wipe duration everywhere.
@@ -51,10 +51,6 @@ _PACE_PRESETS = {
     "balanced": (0.30, 0.6, 1.1),
     "late": (0.45, 0.9, 1.8),
 }
-# `snappy` is not a fourth setting — it is the old name for `early`, kept so
-# existing muscle memory and scripts keep working. It renders byte-identical
-# output, which the CLI help says out loud rather than listing it as a peer.
-_PACE_PRESETS["snappy"] = _PACE_PRESETS["early"]
 DEFAULT_WIPE_DUR = 0.35
 
 # ease-in-out circ, inlined, driven off q = 1-P (see the module docstring).

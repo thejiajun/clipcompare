@@ -8,6 +8,7 @@ import pytest
 
 from clipcompare.modes.wipe import (
     DEFAULT_WIPE_DUR,
+    PACES,
     Options,
     build,
     output_size,
@@ -49,10 +50,6 @@ def test_output_dimensions_are_even():
 )
 def test_pace_presets_place_the_sweep(pace, duration, expected):
     assert resolve_start(duration, pace, None) == pytest.approx(expected, abs=0.01)
-
-
-def test_snappy_is_an_alias_of_early():
-    assert resolve_start(3.0, "snappy", None) == resolve_start(3.0, "early", None)
 
 
 def test_explicit_start_accepts_seconds_and_percent():
@@ -140,15 +137,11 @@ def test_no_trim_flag_without_trim_to():
     assert "-t" not in build(clip(), clip(), opts()).command
 
 
-def test_snappy_renders_identically_to_early_because_it_is_an_alias():
-    # Listed in --pace for muscle memory only; it must not drift into being a
-    # fourth setting that silently differs from early.
-    early = build(clip(duration=5.0), clip(duration=5.0), opts(pace="early")).command
-    snappy = build(clip(duration=5.0), clip(duration=5.0), opts(pace="snappy")).command
-    assert early == snappy
-
-
 def test_an_audio_clip_is_drawn_as_its_waveform():
     plan = build(clip(audio=True), sound(), opts())
     assert "[0:v]" in graph(plan.command) and "movie=" in graph(plan.command)
     assert "[0:a]aresample=48000,aformat=channel_layouts=mono,showwaves" in waves(plan)[0]
+
+
+def test_pace_has_three_settings_and_no_aliases():
+    assert PACES == ("early", "balanced", "late")

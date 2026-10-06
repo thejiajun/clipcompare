@@ -17,13 +17,9 @@ def test_missing_mode_suggests_a_pasteable_line(tmp_path, capsys, monkeypatch):
     assert "clipcompare side" in capsys.readouterr().err
 
 
-def test_pip_alias_resolves():
-    assert cli.MODE_ALIASES["pict"] == "pip"
-
-
-@pytest.mark.parametrize("name", ["sbs", "render"])
-def test_side_has_one_name(name):
-    assert name not in cli.MODE_ALIASES
+@pytest.mark.parametrize("name", ["sbs", "render", "pict", "mosaic"])
+def test_every_mode_has_one_name(name):
+    assert cli.MODES == ("side", "wipe", "pip", "grid")
     with pytest.raises(SystemExit):
         cli._parser().parse_args([name, "a.mp4", "b.mp4"])
 
@@ -59,10 +55,6 @@ def test_grid_rejects_impossible_settings(extra, message):
     args = cli._parser().parse_args(["grid", "a.mp4", "b.mp4", "c.mp4", *extra])
     with pytest.raises(SystemExit, match=message):
         cli._check_grid(args, 3)
-
-
-def test_grid_alias_resolves():
-    assert cli.MODE_ALIASES["mosaic"] == "grid"
 
 
 def test_no_arguments_prints_help(capsys):

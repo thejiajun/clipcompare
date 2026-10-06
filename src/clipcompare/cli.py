@@ -27,7 +27,6 @@ from .probe import ClipInfo, ProbeError, lead_in_black, probe, require_binaries
 
 FONT_NAME = "TikTokSans-Medium.ttf"
 MODES = ("side", "wipe", "pip", "grid")
-MODE_ALIASES = {"pict": "pip", "mosaic": "grid"}
 
 
 def _bundled_font(stack: contextlib.ExitStack) -> Path:
@@ -175,7 +174,7 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_grid_parser(subparsers) -> None:
     grid = subparsers.add_parser(
-        "grid", aliases=["mosaic"],
+        "grid",
         help="any number of clips tiled N x M, all at once or one at a time",
         description=(
             "Any number of clips tiled N x M in reading order (left to right, then down), "
@@ -349,8 +348,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--pace", choices=wipe_mode.PACES, default="early", metavar="PACE",
-        help="where the sweep fires: early (default), balanced, late "
-             "(snappy is accepted as an alias of early)",
+        help="where the sweep fires: early (default), balanced or late",
     )
     group.add_argument(
         "--wipe-start", metavar="SEC|N%%",
@@ -371,7 +369,7 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument("--trim-to", type=float, metavar="SEC", help="trim the output to N seconds")
 
     pip = subparsers.add_parser(
-        "pip", aliases=["pict"],
+        "pip",
         help="one clip full-frame, the other as a rounded corner inset",
         description="One clip full-frame, the other as a rounded corner inset.",
     )
@@ -803,8 +801,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # `clipcompare a.mp4 b.mp4` is the shape people reach for first — point at a
     # mode rather than letting argparse say "invalid choice".
-    known = set(MODES) | set(MODE_ALIASES)
-    if argv and argv[0] not in known and not argv[0].startswith("-"):
+    if argv and argv[0] not in MODES and not argv[0].startswith("-"):
         if Path(argv[0]).is_file():
             mode = "side" if len(argv) <= 2 or not Path(argv[2]).is_file() else "grid"
             hint = shlex.join(["clipcompare", mode, *argv])
@@ -827,7 +824,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    mode = MODE_ALIASES.get(args.command, args.command)
+    mode = args.command
     try:
         return _run(mode, args)
     except ProbeError as exc:
