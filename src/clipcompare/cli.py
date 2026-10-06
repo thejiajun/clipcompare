@@ -227,7 +227,7 @@ def _add_grid_parser(subparsers) -> None:
     common = grid.add_argument_group("common")
     common.add_argument(
         "--audio", default="auto", metavar="auto|none|mix|N",
-        help="auto (default): the playing clip's sound with --sequential, otherwise clip 1's; "
+        help="auto (default): the playing clip's sound with --sequential or --switch, otherwise clip 1's; "
              "none; mix (all at once); or a clip number",
     )
     _add_render_arguments(common)
@@ -257,8 +257,13 @@ def _add_grid_parser(subparsers) -> None:
         help="with --sequential, a still, silent moment between turns, default 0.5, 0 for none",
     )
     group.add_argument(
+        "--switch", type=float, default=0.0, metavar="SEC",
+        help="play every clip at once on one timeline, moving the outline and the sound to the "
+             "next tile every SEC seconds (1, 2, ... N, 1, ...)",
+    )
+    group.add_argument(
         "--highlight", dest="color_b", default=DS_ACCENT_700, metavar="HEX",
-        help="outline colour of the playing tile with --sequential (default: --ds-accent-700)",
+        help="outline colour of the playing tile with --sequential or --switch (default: --ds-accent-700)",
     )
     group.add_argument(
         "--head", type=float, metavar="SEC",
@@ -291,6 +296,7 @@ def _parser() -> argparse.ArgumentParser:
             "  clipcompare wipe before.mp4 after.mp4 --direction lr --pace early\n"
             "  clipcompare pip  before.mp4 after.mp4 --corner tr\n"
             "  clipcompare grid take-*.mp4 --sequential --head 8\n"
+            "  clipcompare grid orig.mp4 v1.mp4 v2.mp4 --switch 4\n"
             "  clipcompare grid v3.mp3 v4.mp3 --sequential   # audio becomes a waveform"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -461,6 +467,7 @@ def _make_plan(mode: str, args, clips: list[ClipInfo], out, label_fonts, label_d
         opts = grid_mode.Options(
             **shared, cols=args.cols, rows=args.rows, panel=args.panel, gap=args.gap,
             length=args.length, sequential=args.sequential, pause=args.pause if args.sequential else 0.0,
+            switch=args.switch,
             holds=tuple(_hold(clip) for clip in clips) if args.sequential and not args._still else (),
             title_font=args._title_font,
             prompts=args._prompts, caption_fonts=args._caption_fonts, info_font=args._info_font,
@@ -527,6 +534,10 @@ def _check_grid(args: argparse.Namespace, count: int) -> None:
             )
     if args.pause < 0:
         raise SystemExit("clipcompare: --pause cannot be negative")
+    if args.switch < 0:
+        raise SystemExit("clipcompare: --switch cannot be negative")
+    if args.switch and args.sequential:
+        raise SystemExit("clipcompare: --switch plays the clips at once and --sequential one at a time; pick one")
     audio = args.audio
     if audio not in grid_mode.AUDIO_MODES and not (audio.isdigit() and 1 <= int(audio) <= count):
         raise SystemExit(f"clipcompare: --audio takes auto, none, mix or a clip number 1-{count}")
@@ -556,7 +567,7 @@ def _apply_manifest(args: argparse.Namespace) -> None:
             args._segments = spec.segments
             args._recipes = spec.recipes if any(spec.recipes) else ()
             args.stats = args.stats or spec.stats
-            args.sequential = args.sequential or spec.sequential
+            args.sequential = args.sequential or (spec.sequential and not args.switch)
             if spec.titles and not args.title:
                 args.title = ",".join(spec.titles) if len(spec.titles) > 1 else spec.titles[0]
             # --html alone writes just the page, unless the manifest names a video.

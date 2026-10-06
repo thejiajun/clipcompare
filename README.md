@@ -301,7 +301,8 @@ brew install ffmpeg
 | `--gap PX` | 格子之间的黑缝，1080p 下的像素，默认 4，`0` 无缝。没铺满的空格也填黑 |
 | `--length shortest\|longest` | 同时播放时：`shortest` 按最短那段截；`longest` 让短的冻住最后一帧 |
 | `--sequential` | 轮流播放：按阅读顺序一次只播一格，没轮到的停在第一个有画面的帧（自动跳过开头黑帧），播完的停在最后一帧，**正在播的那格描边**，声音跟着它走 |
-| `--highlight HEX` | 正在播放那格的描边颜色，默认 `--ds-accent-700` `#cfc3ff` |
+| `--switch SEC` | 同时播放、一条时间线：每 SEC 秒把描边和声音交给下一格（1、2…N、1…），画面一直在走，适合在同一时刻来回比对。没声音的那段轮到时就是静音；`--audio none` 静音；不能和 `--sequential` 一起用 |
+| `--highlight HEX` | 正在播放（`--sequential`）或轮到（`--switch`）那格的描边颜色，默认 `--ds-accent-700` `#cfc3ff` |
 | `--head SEC` | 每段只取前 SEC 秒（同时播放、轮流播放都适用） |
 | `--pause SEC` | 轮流播放时两段之间停多久（画面停住、没有声音），默认 0.5，`0` 无停顿 |
 | `--title TEXT` | 网格上方标题条里居中的标题（不会压到格子之间的缝）；配合 `--group` 时每组一个，逗号分隔 |
@@ -332,6 +333,9 @@ clipcompare side dub-a.mp4 dub-b.mp4 --sequential
 
 # 一批配音版本拼成网格，每段只听前 8 秒，轮流播
 clipcompare grid dub-*.mp4 --sequential --head 8
+
+# 几个版本同时播、同一时刻来回比：每 4 秒描边和声音换到下一格
+clipcompare grid orig.mp4 v1.mp4 v2.mp4 v3.mp4 --switch 4
 
 # 固定 4 列，同时播放，混音
 clipcompare grid v1.mp4 v2.mp4 v3.mp4 v4.mp4 v5.mp4 --cols 4 --audio mix

@@ -10,6 +10,9 @@ buffered while others play), a finished tile holds its last frame, the playing
 tile is outlined, and the sound follows it. --pause holds everything still and
 silent for a moment between turns.
 
+--switch SEC keeps every clip playing at once on one timeline but moves the
+outline and the sound to the next tile every SEC seconds, 1, 2, ... N, 1, ...
+
 Audio-only clips become waveform panels. With nothing but audio there is no
 aspect to follow, so up to four sit in one row and the tiles fill a 1920x1080
 canvas; in a sequence each line moves only during its own turn.
@@ -94,6 +97,7 @@ class Options(Common):
     sequential: bool = False
     holds: tuple[float, ...] = ()  # --sequential: per clip, where its picture starts
     pause: float = 0.0         # --sequential: seconds of stillness between turns
+    switch: float = 0.0        # all at once, the outline and sound moving on every this many seconds
     tail: float = 0.0          # --sequential: ...and after the last one (between --group runs)
     title: str | None = None   # drawn in a header strip above the tiles
     title_font: Path | None = None
@@ -242,6 +246,26 @@ def sequence_tiles(
     return steps, stills, turns
 
 
+def switch_windows(clips: list[ClipInfo], every: float, length: str) -> list[list[tuple[float, float]]]:
+    """--switch: per clip, the spans of the shared timeline when it is the
+    outlined, audible one, taking turns every `every` seconds."""
+    durations = [clip.duration for clip in clips if clip.duration]
+    if not durations:
+        raise ProbeError("--switch needs the clips' durations, and ffprobe reported none")
+    total = max(durations) if length == "longest" else min(durations)
+    windows: list[list[tuple[float, float]]] = [[] for _ in clips]
+    turn = 0
+    while turn * every < total - LENGTH_EPSILON:
+        windows[turn % len(clips)].append((turn * every, min((turn + 1) * every, total)))
+        turn += 1
+    return windows
+
+
+def during(spans: list[tuple[float, float]]) -> str:
+    """An ffmpeg expression that is 1 inside any of the spans, 0 elsewhere."""
+    return "+".join(f"gte(t,{start:.3f})*lt(t,{end:.3f})" for start, end in spans) or "0"
+
+
 def grid_audio(
     clips: list[ClipInfo], opts: Options, holds: tuple[float, ...],
 ) -> tuple[str, list[str], list[str]]:
@@ -265,6 +289,22 @@ def grid_audio(
             steps.append(f"{source}atrim={hold:.3f}:{clip.duration + gap:.3f},asetpts=N/SR/TB[s{index}]")
         turns = "".join(f"[s{index}]" for index in range(len(clips)))
         steps.append(f"{turns}concat=n={len(clips)}:v=0:a=1[aout]")
+        return "follow", steps, audio_args("both", lossless=lossless)
+
+    if opts.switch and choice == "auto":
+        windows = switch_windows(clips, opts.switch, opts.length)
+        steps = [
+            f"[{index}:a]aresample=48000,aformat=channel_layouts=stereo,"
+            f"volume='{during(windows[index])}':eval=frame[s{index}]"
+            for index in with_sound
+        ]
+        if len(with_sound) == 1:
+            steps.append(f"[s{with_sound[0]}]anull[aout]")
+        else:
+            sources = "".join(f"[s{index}]" for index in with_sound)
+            steps.append(
+                f"{sources}amix=inputs={len(with_sound)}:duration={opts.length}:normalize=0[aout]"
+            )
         return "follow", steps, audio_args("both", lossless=lossless)
 
     if choice == "mix" and len(with_sound) > 1:
@@ -344,6 +384,11 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
     else:
         steps = together_tiles(clips, chains, opts.length, (tile_w, tile_h), fps, label_dir, waves, opts.head)
         shortest = 1 if opts.length == "shortest" and not still else 0
+    switching = bool(opts.switch and not opts.sequential and not still)
+    # Per tile, the spans it is outlined in.
+    outlined = (
+        switch_windows(clips, opts.switch, opts.length) if switching else [[turn] for turn in turns]
+    )
 
     layout = "|".join(f"{x}_{y}" for x, y in cells)
     tiles = "".join(f"[t{index}]" for index in range(count))
@@ -354,13 +399,18 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         steps.append(f"[{last}]pad={out_w}:{out_h}:0:{header}:color={DS_BLACK}[hd]")
         last = "hd"
 
-    if turns:
+    if turns or switching:
         thickness = max(round(short * 8 / 1080), 2)
-        boxes = ",".join(
-            f"drawbox=x={x}:y={y}:w={tile_w}:h={tile_h}:color={opts.color_b}:t={thickness}"
-            f":enable='between(t,{start:.3f},{end:.3f})'"
-            for (x, y), (start, end) in zip(spots, turns)
-        )
+        boxes = []
+        for (x, y), spans in zip(spots, outlined):
+            if not spans:
+                continue
+            # Switching turns meet end to end, so they must not both hold at the seam.
+            when = during(spans) if switching else "between(t,{:.3f},{:.3f})".format(*spans[0])
+            boxes.append(
+                f"drawbox=x={x}:y={y}:w={tile_w}:h={tile_h}:color={opts.color_b}:t={thickness}:enable='{when}'"
+            )
+        boxes = ",".join(boxes)
         steps.append(f"[{last}]{boxes}[hl]")
         last = "hl"
 
@@ -438,6 +488,7 @@ def build(clips: list[ClipInfo], opts: Options, label_dir: Path | None = None) -
         audio=audio,
         detail=f"{cols}x{rows}, {opts.fit}, "
                f"{'image' if still else 'sequential' if opts.sequential else opts.length}"
+               + (f", switching every {opts.switch:g}s" if switching else "")
                + (f", lossless {opts.lossless} {pix_fmt}" if opts.lossless else ""),
         command=cmd,
         pre_commands=pre_commands,

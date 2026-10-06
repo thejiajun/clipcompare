@@ -243,3 +243,23 @@ def test_groups_render_each_run_then_join_them_by_copy(tmp_path):
     assert (tmp_path / "groups.txt").read_text().splitlines() == [
         f"file '{tmp_path / f'group-{number}' / 'part.mp4'}'" for number in (1, 2)
     ]
+
+
+def test_switch_plays_together_and_hands_the_outline_and_sound_round():
+    plan = build([clip(name=f"c{index}.mp4", duration=10.0, audio=True) for index in range(3)], opts(switch=3))
+    g = graph(plan.command)
+    assert "concat" not in g  # one shared timeline, nobody waits
+    # 0-3 tile 1, 3-6 tile 2, 6-9 tile 3, 9-10 tile 1 again.
+    assert "enable='gte(t,0.000)*lt(t,3.000)+gte(t,9.000)*lt(t,10.000)'" in g
+    assert "enable='gte(t,3.000)*lt(t,6.000)'" in g
+    assert "volume='gte(t,6.000)*lt(t,9.000)':eval=frame" in g
+    assert "amix=inputs=3:duration=shortest:normalize=0[aout]" in g
+    assert plan.audio == "follow"
+    assert "-shortest" in plan.command
+
+
+def test_switch_skips_silent_clips_and_respects_audio_none():
+    tiles = [clip(name="a.mp4", duration=6.0, audio=True), clip(name="b.mp4", duration=6.0)]
+    g = graph(build(tiles, opts(switch=2)).command)
+    assert "[s0]anull[aout]" in g and "[1:a]" not in g
+    assert "volume" not in graph(build(tiles, opts(switch=2, audio="none")).command)
