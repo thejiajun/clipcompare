@@ -1,3 +1,5 @@
+> **已迁移，本仓库只读。** 代码和历史已并入 [jiajun-toolbox](https://github.com/thejiajun/jiajun-toolbox) 的 `apps/clipcompare`，以后在那里维护。
+
 # clipcompare
 
 把两个或更多视频拼成一个对比视频的命令行工具，四种呈现方式。只依赖 `ffmpeg` / `ffprobe`，Python 侧零第三方依赖。
