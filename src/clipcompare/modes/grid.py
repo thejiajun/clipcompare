@@ -67,6 +67,7 @@ from ..filters import (
     picture,
     resolve_fps,
     scale_notes,
+    scaled_px,
     still_args,
     still_chain,
     wave_band,
@@ -135,16 +136,12 @@ def audio_tiles(
     """tile_size for clips that are all audio: share AUDIO_CANVAS between them,
     less the title bar, so the whole video stays 1920x1080."""
     canvas_w, canvas_h = AUDIO_CANVAS
-    spacing = gap_px(gap, canvas_h)
+    spacing = scaled_px(gap, canvas_h)
     if header or shared:
         canvas_h -= header_height(canvas_h, header, shared)
     width = even((canvas_w - (cols - 1) * spacing) // cols)
     height = even((canvas_h - (rows - 1) * spacing) // rows)
     return width, height, min(width, height), spacing
-
-
-def gap_px(gap: int, short: int) -> int:
-    return max(even(round(gap * short / 1080)), 2) if gap > 0 else 0
 
 
 def tile_size(
@@ -160,7 +157,7 @@ def tile_size(
     while True:
         width, height = panel_size(first, panel)
         short = min(width, height)
-        spacing = gap_px(gap, short)
+        spacing = scaled_px(gap, short)
         canvas = max(cols * width + (cols - 1) * spacing, rows * height + (rows - 1) * spacing)
         if not auto or canvas <= MAX_CANVAS or panel <= 16:
             return width, height, short, spacing

@@ -282,3 +282,70 @@ def test_sequential_audio_b_waits_flat_and_needs_no_still_read():
     assert "apad=whole_dur=6.967" in a          # a flat once its turn is over
     assert "adelay=delays=2967:all=1" in b       # b flat until its turn
     assert "[s0][s1]concat=n=2:v=0:a=1[aout]" in body
+
+
+def test_no_padding_leaves_the_graph_as_it_was():
+    body = graph(build(clip(), clip(), opts()).command)
+    assert "[va][vb]hstack" in body and "[pa]" not in body
+    assert "drawbox=x=1078:y=0:w=4:h=ih" in body  # the divider still defaults to 4
+
+
+@pytest.mark.parametrize(
+    "a,size,pads,stack",
+    [
+        # lr: A takes the padding before it, B the padding on both sides.
+        (clip(), (2340, 2040), ("pad=1140:2040:60:60", "pad=1200:2040:60:60"), "[pa][pb]hstack"),
+        (clip(1920, 1080), (2040, 2340), ("pad=2040:1140:60:60", "pad=2040:1200:60:60"), "[pa][pb]vstack"),
+    ],
+)
+def test_padding_frames_both_panels_in_the_background_colour(a, size, pads, stack):
+    plan = build(a, a, opts(padding=60, background="0xf2eee8"))
+    body = graph(plan.command)
+    assert (plan.out_w, plan.out_h) == size
+    assert all(f"{pad}:color=0xf2eee8" in body for pad in pads)
+    assert stack in body
+
+
+def test_padding_scales_with_the_panel_and_stays_even():
+    plan = build(clip(), clip(), opts(panel=2160, padding=31))
+    assert (plan.out_w, plan.out_h) == (2 * 2160 + 3 * 62, 3840 + 2 * 62)
+
+
+def test_padding_turns_the_divider_off_unless_it_is_asked_for():
+    assert "drawbox" not in graph(build(clip(), clip(), opts(padding=60)).command)
+    body = graph(build(clip(), clip(), opts(padding=60, divider=4)).command)
+    assert "drawbox=x=1168:y=0:w=4:h=ih" in body  # 60 + 1080 + 30 - 2: centred in the gap
+
+
+def test_thin_padding_keeps_the_labels_on_their_chips_inside_the_panels(tmp_path):
+    font = (Path("/fonts/Mono.ttf"), Path("/fonts/Mono.ttf"))
+    lr = graph(build(clip(), clip(), opts(labels=("A", "B"), fonts=font, padding=20), tmp_path).command)
+    assert "x=97:y=85" in lr and "x=w-tw-97" in lr  # 20 + inset 48 + box padding 29 / 17
+    assert "fontcolor=0xfcfaf7" in lr and "fontcolor=0xcfc3ff" in lr
+    tb = graph(
+        build(clip(1920, 1080), clip(1920, 1080), opts(labels=("A", "B"), fonts=font, padding=20), tmp_path).command
+    )
+    assert "y=1185" in tb  # 2 * 20 + panel 1080 + inset 48 + box padding 17
+
+
+@pytest.mark.parametrize("layout,b", [("lr", "x=1200:y=44"), ("tb", "x=60:y=1184")])
+def test_padding_that_holds_a_label_takes_it_above_each_panel(tmp_path, layout, b):
+    font = (Path("/fonts/Mono.ttf"), Path("/fonts/Mono.ttf"))
+    body = graph(build(
+        clip(1920, 1080) if layout == "tb" else clip(), clip(1920, 1080) if layout == "tb" else clip(),
+        opts(labels=("A", "B"), fonts=font, padding=60, background="0xf2eee8"), tmp_path,
+    ).command)
+    assert "x=60:y=44" in body and b in body  # each panel's left edge; baseline 30 + 0.35 em
+    assert body.count("boxcolor=black@0") == 2 and body.count("y_align=baseline") == 2
+    # On a light canvas both default to the light theme's text colour.
+    assert body.count("fontcolor=0x111111") == 2
+
+
+def test_labels_on_a_dark_canvas_and_given_colours_keep_theirs(tmp_path):
+    font = (Path("/fonts/Mono.ttf"), Path("/fonts/Mono.ttf"))
+    dark = graph(build(clip(), clip(), opts(labels=("A", "B"), fonts=font, padding=60), tmp_path).command)
+    assert "fontcolor=0xfcfaf7" in dark and "fontcolor=0xcfc3ff" in dark
+    given = graph(build(
+        clip(), clip(), opts(labels=("A", "B"), fonts=font, padding=60, background="0xf2eee8", color_b="0xde0000"), tmp_path,
+    ).command)
+    assert "fontcolor=0x111111" in given and "fontcolor=0xde0000" in given

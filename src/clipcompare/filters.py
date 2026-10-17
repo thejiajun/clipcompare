@@ -6,7 +6,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .probe import ClipInfo
-from .tokens import DS_ACCENT_700, DS_BLACK, DS_EGGSHELL, DS_INVERT_600_DARK, DS_PRIMARY_300_DARK
+from .tokens import (
+    DS_ACCENT_700, DS_BLACK, DS_EGGSHELL, DS_INVERT_600_DARK, DS_PRIMARY_300_DARK,
+    DS_TEXT_SECONDARY_DARK, DS_TEXT_SECONDARY_LIGHT,
+)
 
 FITS = ("cover", "contain")
 LENGTHS = ("shortest", "longest")
@@ -85,6 +88,30 @@ def escape(value: str) -> str:
 
 def even(value: int) -> int:
     return value - (value % 2)
+
+
+def scaled_px(value: int, reference: int) -> int:
+    """A 1080-normalised length at a `reference` short edge, kept even so
+    4:2:0 chroma stays aligned; anything above 0 is at least 2."""
+    return max(even(round(value * reference / 1080)), 2) if value > 0 else 0
+
+
+def hex_color(value: str) -> str:
+    """'F2EEE8', '#F2EEE8' or '0xF2EEE8' as ffmpeg's 0xrrggbb; ValueError otherwise."""
+    digits = value.strip().removeprefix("#").removeprefix("0x").removeprefix("0X")
+    if len(digits) != 6 or any(char not in "0123456789abcdefABCDEF" for char in digits):
+        raise ValueError(f"not a six-digit hex colour: {value!r}")
+    return f"0x{digits.lower()}"
+
+
+def text_on(background: str) -> str:
+    """Secondary text that reads on `background` (0xrrggbb): the dark theme's
+    on a dark canvas, the light theme's on a light one (WCAG luminance)."""
+    channels = [int(background[index:index + 2], 16) / 255 for index in (2, 4, 6)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    # Above ~0.18 dark text has the higher contrast ratio.
+    return DS_TEXT_SECONDARY_LIGHT if luminance > 0.179 else DS_TEXT_SECONDARY_DARK
 
 
 def resolve_fps(a: ClipInfo, b: ClipInfo, override: str | None) -> tuple[str, float]:

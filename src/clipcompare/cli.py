@@ -18,8 +18,8 @@ from pathlib import Path
 from . import __version__, cache, fonts, info, manifest, media, page, stats
 from . import prompts as prompts_mod
 from .captions import Fonts as CaptionFonts
-from .filters import AUDIO_CHOICES, FITS, IMAGE_EXTENSIONS, LENGTHS, LOSSLESS, LOSSLESS_EXTENSION, Plan
-from .tokens import DS_ACCENT_700, DS_EGGSHELL, DS_FONT_BODY, DS_FONT_DISPLAY, DS_FONT_SANS
+from .filters import AUDIO_CHOICES, FITS, IMAGE_EXTENSIONS, LENGTHS, LOSSLESS, LOSSLESS_EXTENSION, Plan, hex_color
+from .tokens import DS_ACCENT_700, DS_BLACK, DS_EGGSHELL, DS_FONT_BODY, DS_FONT_DISPLAY, DS_FONT_SANS
 from .modes import grid as grid_mode
 from .modes import pip as pip_mode
 from .modes import sidebyside, wipe as wipe_mode
@@ -161,8 +161,8 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     names.add_argument("-B", "--label-b", metavar="TEXT", help="label for the second clip")
     names.add_argument("--no-labels", action="store_true", help="draw no labels")
     names.add_argument("--font", type=Path, help="label and title font (default: Telka from the design system if installed, else bundled TikTok Sans)")
-    names.add_argument("--color-a", default=DS_EGGSHELL, metavar="HEX", help="first label colour (default: --ds-eggshell)")
-    names.add_argument("--color-b", default=DS_ACCENT_700, metavar="HEX", help="second label colour (default: --ds-accent-700)")
+    names.add_argument("--color-a", metavar="HEX", help="first label colour (default: --ds-eggshell)")
+    names.add_argument("--color-b", metavar="HEX", help="second label colour (default: --ds-accent-700)")
 
     common = parser.add_argument_group("common")
     common.add_argument(
@@ -334,8 +334,18 @@ def _parser() -> argparse.ArgumentParser:
         help="shortest (default) or longest (freezes the shorter clip's last frame)",
     )
     group.add_argument(
-        "--divider", type=int, default=4, metavar="PX",
-        help="separator line thickness, default 4, 0 to disable",
+        "--divider", type=int, metavar="PX",
+        help="separator line thickness, default 4 (0 with --padding), 0 to disable",
+    )
+    group.add_argument(
+        "--padding", type=int, default=0, metavar="PX",
+        help="space around and between the panels at 1080p, in the --background colour, default 0; "
+             "from 57 px up the labels move into it, above their panels",
+    )
+    group.add_argument(
+        "--background", metavar="HEX",
+        help="canvas colour behind the panels: the padding and the title bar (default: --ds-black); "
+             "text drawn on it, labels included unless --color-a / --color-b, turns dark on a light colour",
     )
     group.add_argument(
         "--sequential", action="store_true",
@@ -435,8 +445,8 @@ def _shared_kwargs(args: argparse.Namespace, out: Path, label_fonts) -> dict:
         "fonts": label_fonts,
         "audio": args.audio,
         "fit": args.fit,
-        "color_a": args.color_a,
-        "color_b": args.color_b,
+        "color_a": args.color_a or DS_EGGSHELL,
+        "color_b": args.color_b or DS_ACCENT_700,
         "fps": args.fps,
         "crf": args.crf,
         "preset": args.preset,
@@ -480,9 +490,12 @@ def _make_plan(mode: str, args, clips: list[ClipInfo], out, label_fonts, label_d
         return grid_mode.build(clips, opts, label_dir)
     a, b = clips
     if mode == "side":
+        # side picks its default label colours for what the labels sit on.
+        shared.update(color_a=args.color_a, color_b=args.color_b)
         opts = sidebyside.Options(
             **shared, layout=args.layout, panel=args.panel,
             length=args.length, divider=args.divider, sequential=args.sequential,
+            padding=args.padding, background=args._background,
             hold_b_at=_hold(b) if args.sequential and not args._still else 0.0,
             info=args._infos[0] if args._infos else None, info_font=args._info_font,
         )
@@ -611,8 +624,15 @@ def _run(mode: str, args: argparse.Namespace) -> int:
             raise SystemExit(f"clipcompare: clip not found: {clip}")
     if getattr(args, "panel", 0) and args.panel < 16:
         raise SystemExit("clipcompare: --panel must be at least 16")
-    if getattr(args, "divider", 0) < 0:
+    if (getattr(args, "divider", None) or 0) < 0:
         raise SystemExit("clipcompare: --divider cannot be negative")
+    if getattr(args, "padding", 0) < 0:
+        raise SystemExit("clipcompare: --padding cannot be negative")
+    if mode == "side":
+        try:
+            args._background = hex_color(args.background) if args.background else DS_BLACK
+        except ValueError as exc:
+            raise SystemExit(f"clipcompare: --background: {exc}") from exc
     if getattr(args, "head", None) is not None and args.head <= 0:
         raise SystemExit("clipcompare: --head must be a positive number of seconds")
     if mode == "grid":

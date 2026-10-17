@@ -24,15 +24,17 @@ from ..filters import (
     native_panel,
     picture,
     resolve_fps,
+    scaled_px,
     scale_notes,
     still_args,
     still_chain,
+    text_on,
     write_label_files,
 )
 from .. import info as info_mod
 from .. import layers
 from ..probe import ClipInfo, ProbeError
-from ..tokens import DS_BLACK
+from ..tokens import DS_ACCENT_700, DS_BLACK, DS_EGGSHELL, DS_TEXT_PRIMARY_LIGHT, DS_TEXT_SECONDARY_LIGHT
 
 LAYOUTS = ("auto", "lr", "tb")
 
@@ -42,7 +44,12 @@ class Options(Common):
     layout: str = "auto"
     panel: int = 0         # short edge of each panel; 0 = 1080, or an image's own size
     length: str = "shortest"
-    divider: int = 4       # 1080-normalised px, 0 disables
+    divider: int | None = None  # 1080-normalised px, 0 disables; None: 4, or 0 with padding
+    padding: int = 0       # 1080-normalised px around and between the panels
+    background: str = DS_BLACK  # the canvas: padding and the title bar
+    # None: the design default, chosen for what the label sits on (label_colors).
+    color_a: str | None = None
+    color_b: str | None = None
     sequential: bool = False  # A plays through, then B; the idle side holds its frame
     hold_b_at: float = 0.0    # --sequential: the moment of B shown while A plays
     info: info_mod.Run | None = None   # --stats: measured strips and the shared title bar
@@ -106,6 +113,17 @@ def sequence_audio(a: ClipInfo, b: ClipInfo, b_start: float) -> list[str]:
     return steps
 
 
+def label_colors(opts: Options, outside: bool) -> tuple[str, str]:
+    """The label colours: as given, else the design defaults — which on a
+    light --background, once the labels sit on it rather than on their dark
+    chip, give way to the light theme's text colour for both."""
+    if outside and text_on(opts.background) == DS_TEXT_SECONDARY_LIGHT:
+        defaults = (DS_TEXT_PRIMARY_LIGHT, DS_TEXT_PRIMARY_LIGHT)
+    else:
+        defaults = (DS_EGGSHELL, DS_ACCENT_700)
+    return opts.color_a or defaults[0], opts.color_b or defaults[1]
+
+
 def resolve_layout(a: ClipInfo, requested: str) -> str:
     if requested != "auto":
         return requested
@@ -138,10 +156,17 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     opts = replace(opts, panel=panel)
     layout = resolve_layout(a, opts.layout)
     panel_w, panel_h = panel_size(a, opts.panel)
+    # Padding frames both panels and splits them, so the divider line is
+    # redundant there unless asked for.
+    space = scaled_px(opts.padding, opts.panel)
+    divider = opts.divider if opts.divider is not None else (0 if space else 4)
+    # Each panel's top-left corner on the canvas.
     if layout == "lr":
-        out_w, out_h, stack = panel_w * 2, panel_h, "hstack"
+        out_w, out_h, stack = panel_w * 2 + space * 3, panel_h + space * 2, "hstack"
+        corners = [(space, space), (space * 2 + panel_w, space)]
     else:
-        out_w, out_h, stack = panel_w, panel_h * 2, "vstack"
+        out_w, out_h, stack = panel_w + space * 2, panel_h * 2 + space * 3, "vstack"
+        corners = [(space, space), (space, space * 2 + panel_h)]
 
     fps, fps_value = resolve_fps(a, b, opts.fps)
     pix_fmt = lossless_pix_fmt([a, b], opts.lossless) if opts.lossless else "yuv420p"
@@ -169,13 +194,24 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
         # An audio side's waveform runs flat to the end instead of freezing.
         longest = max(a.duration, b.duration) if opts.length == "longest" else 0.0
         steps = []
-        for index, (clip, pad, name) in enumerate(((a, pad_a, "va"), (b, pad_b, "vb"))):
+        for index, (clip, freeze, name) in enumerate(((a, pad_a, "va"), (b, pad_b, "vb"))):
             wave, head, render = picture(
                 index, clip, panel_w, panel_h, fps, total=longest, folder=label_dir, head=opts.head,
             )
             pre_commands += render
-            steps += [*wave, f"{head}{chains[index]}{'' if clip.is_audio else pad}[{name}]"]
-    steps.append(f"[va][vb]{stack}=inputs=2:shortest={shortest}[st]")
+            steps += [*wave, f"{head}{chains[index]}{'' if clip.is_audio else freeze}[{name}]"]
+    if space:
+        # A takes the padding before it, B the padding on both sides of it.
+        if layout == "lr":
+            sizes = ((panel_w + space, panel_h + space * 2), (panel_w + space * 2, panel_h + space * 2))
+        else:
+            sizes = ((panel_w + space * 2, panel_h + space), (panel_w + space * 2, panel_h + space * 2))
+        for name, (width, height) in zip(("a", "b"), sizes):
+            steps.append(f"[v{name}]pad={width}:{height}:{space}:{space}:color={opts.background}[p{name}]")
+        stacked = "[pa][pb]"
+    else:
+        stacked = "[va][vb]"
+    steps.append(f"{stacked}{stack}=inputs=2:shortest={shortest}[st]")
     last = "st"
 
     # The info layer, drawn the way grid draws its tiles: a strip along each
@@ -183,38 +219,45 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     metrics = LabelMetrics.for_reference(opts.panel)
     run_info = opts.info if opts.info and opts.info_font and label_dir is not None else None
     if run_info:
-        spots = [(0, 0), (panel_w, 0) if layout == "lr" else (0, panel_h)]
+        spots = corners
         painted = layers.pictures(run_info, opts.info_font, opts.label_bg, label_dir, panel_w, metrics)
         last = layers.overlay(
             painted, spots, panel_h, metrics, steps, inputs, pre_commands, last, still, fps, opts.lossless,
         )
 
-    if opts.divider > 0:
-        thickness = max(round(opts.divider * opts.panel / 1080), 1)
+    if divider > 0:
+        thickness = max(round(divider * opts.panel / 1080), 1)
+        # Centred in the space between the panels (on the seam without padding).
+        middle = space + (panel_w if layout == "lr" else panel_h) + space // 2 - thickness // 2
         if layout == "lr":
-            box = (
-                f"drawbox=x={panel_w - thickness // 2}:y=0:w={thickness}:h=ih"
-                ":color=white@0.85:t=fill"
-            )
+            box = f"drawbox=x={middle}:y=0:w={thickness}:h=ih:color=white@0.85:t=fill"
         else:
-            box = (
-                f"drawbox=x=0:y={panel_h - thickness // 2}:w=iw:h={thickness}"
-                ":color=white@0.85:t=fill"
-            )
+            box = f"drawbox=x=0:y={middle}:w=iw:h={thickness}:color=white@0.85:t=fill"
+
         steps.append(f"[{last}]{box}[dv]")
         last = "dv"
 
     if opts.labels and label_dir is not None:
         assert opts.fonts is not None
         file_a, file_b = write_label_files(opts.labels, label_dir)
-        x_a, y_a = metrics.inset + metrics.pad_h, metrics.inset + metrics.pad_v
+        (left_a, top_a), (left_b, top_b) = corners
+        x_a, y_a = left_a + metrics.inset + metrics.pad_h, top_a + metrics.inset + metrics.pad_v
         if layout == "lr":
-            x_b, y_b = f"w-tw-{metrics.inset + metrics.pad_h}", y_a
+            x_b, y_b = f"w-tw-{space + metrics.inset + metrics.pad_h}", y_a
         else:
-            x_b, y_b = x_a, panel_h + metrics.inset + metrics.pad_v
+            x_b, y_b = x_a, top_b + metrics.inset + metrics.pad_v
+        chip, align = opts.label_bg, ""
+        # Padding that holds a label takes it: plain text on the canvas just
+        # above each panel, clear of the clip's own corners (an app's header).
+        if space >= metrics.size + metrics.pad_v:
+            # y is the baseline: capitals (about 0.7 em tall) centred in the space.
+            baseline = space // 2 + round(metrics.size * 0.35)
+            (x_a, y_a), (x_b, y_b) = ((left, top - space + baseline) for left, top in corners)
+            chip, align = "black@0", ":y_align=baseline"
+        color_a, color_b = label_colors(opts, outside=bool(align))
         labels = ",".join([
-            drawtext(file_a, opts.fonts[0], metrics, opts.color_a, opts.label_bg, x_a, y_a),
-            drawtext(file_b, opts.fonts[1], metrics, opts.color_b, opts.label_bg, x_b, y_b),
+            drawtext(file_a, opts.fonts[0], metrics, color_a, chip, x_a, y_a) + align,
+            drawtext(file_b, opts.fonts[1], metrics, color_b, chip, x_b, y_b) + align,
         ])
         steps.append(f"[{last}]{labels}[lv]")
         last = "lv"
@@ -222,9 +265,10 @@ def build(a: ClipInfo, b: ClipInfo, opts: Options, label_dir: Path | None = None
     if run_info and run_info.shared_text:
         assert opts.info_font
         band = layers.shared_px(min(out_w, out_h))
-        steps.append(f"[{last}]pad={out_w}:{out_h + band}:0:{band}:color={DS_BLACK}[hd]")
+        steps.append(f"[{last}]pad={out_w}:{out_h + band}:0:{band}:color={opts.background}[hd]")
         step, last = layers.shared_line(
             "hd", run_info.shared_text, opts.info_font, band, 0, out_w, label_dir, metrics.inset,
+            color=text_on(opts.background),
         )
         steps.append(step)
         out_h += band

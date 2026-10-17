@@ -3,15 +3,18 @@
 Each constant is named after the `--ds-*` token it copies, so a design-system
 change is a find-and-replace away. Values are written the way ffmpeg filters
 take them (`0xRRGGBB`, `@alpha` for translucent tokens); the video is always a
-dark surface, so translucent tokens use their dark-theme value.
+dark surface, so translucent tokens use their dark-theme value (side's
+--background can make it light; text drawn on it then takes the light one).
 """
 
 from __future__ import annotations
 
 DS_BLACK = "0x111111"              # --ds-black: waveform panel background
 DS_EGGSHELL = "0xfcfaf7"           # --ds-eggshell (dark --ds-text-primary): label text
+DS_TEXT_PRIMARY_LIGHT = "0x111111"  # light --ds-text-primary: side labels on a light --background
 DS_ACCENT_700 = "0xcfc3ff"         # --ds-accent-700 = --ds-brand / --ds-lilac: waveform, highlight
 DS_TEXT_SECONDARY_DARK = "0xfcfaf7@0.7"  # dark --ds-text-secondary, #fcfaf7b3: diff summary, notes
+DS_TEXT_SECONDARY_LIGHT = "0x0d0d0d@0.6"  # light --ds-text-secondary, #0d0d0d99: notes on a light --background
 DS_INVERT_600_DARK = "0x222222@0.6"   # dark --ds-invert-600, rgb(34 34 34 / 60%): label chip
 DS_PRIMARY_300_DARK = "0xfcfaf7@0.1"  # dark --ds-primary-300, rgb(252 250 247 / 10%): centre line
 DS_NEON_GREEN = "0x15cb74"         # --ds-neon-green: a similarity close to the baseline

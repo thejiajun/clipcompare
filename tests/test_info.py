@@ -200,3 +200,20 @@ def test_side_stats_on_two_images(tmp_path):
     from clipcompare.probe import probe
 
     assert probe(out).height > 240   # the title bar sits above the panels
+
+
+def test_side_title_bar_takes_the_background_and_text_that_reads_on_it(tmp_path):
+    from clipcompare.modes import sidebyside
+
+    def body(background):
+        return graph(sidebyside.build(
+            clip(), clip(),
+            sidebyside.Options(out=tmp_path / "o.mp4", info=_side_run(), info_font=FONT, padding=60, background=background),
+            tmp_path,
+        ).command)
+
+    light = body("0xf2eee8")
+    assert ":color=0xf2eee8[hd]" in light and "fontcolor=0x0d0d0d@0.6" in light
+    # The strips sit inside the padded panels.
+    assert "overlay=60:" in light and "overlay=1200:" in light
+    assert "fontcolor=0xfcfaf7@0.7" in body("0x111111")

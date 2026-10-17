@@ -226,7 +226,7 @@ brew install ffmpeg
 | 相似度接近 baseline / 差得远 | `--ds-neon-green` / `--ds-alert` | `#15cb74` / `#de0000` |
 | 波形面板的中线 | `--ds-primary-300`（暗色） | `rgb(252 250 247 / 10%)` |
 
-`side` 的分隔线、`wipe` 的扫描线、`pip` 的边框仍是白色。
+`side` 的分隔线、`wipe` 的扫描线、`pip` 的边框仍是白色。`side` 的底色可以用 `--background` 换掉；换成浅色时，画在底色上的字改用亮色主题的值：留白里的标签 `--ds-text-primary`（`#111111`），标题条里的字 `--ds-text-secondary`（`#0d0d0d99`）。
 
 ## 通用参数
 
@@ -237,7 +237,7 @@ brew install ffmpeg
 | `-o, --out PATH` | 输出文件 |
 | `-l / -A / -B / --no-labels` | 标签，见上 |
 | `--font PATH` | 标签和标题字体。默认本机装了 Telka 就用 Telka，否则自带 TikTok Sans Medium；中文自动换系统黑体 |
-| `--color-a / --color-b HEX` | 两个标签的颜色，默认 `--ds-eggshell` `#fcfaf7` + `--ds-accent-700` `#cfc3ff` |
+| `--color-a / --color-b HEX` | 两个标签的颜色，默认 `--ds-eggshell` `#fcfaf7` + `--ds-accent-700` `#cfc3ff`（`side` 的标签在浅色 `--background` 的留白里时另见下） |
 | `--fit cover\|contain` | `cover` 裁切填满（默认）；`contain` 留黑边保留完整画面 |
 | `--audio a\|b\|both\|none` | 默认 `b`；`both` 混音；某段没音轨时自动退回有音轨的那段 |
 | `--fps N` | 强制输出帧率，默认对齐到两段里较高的那个 |
@@ -256,7 +256,9 @@ brew install ffmpeg
 | `--layout auto\|lr\|tb` | 默认 auto：竖版/方形左右并排，横版上下堆叠 |
 | `--panel PX` | 每块画面的**短边**，默认 1080 —— 竖版出 2160×1920，横版出 1920×2160；两张图片时默认用图片自己的短边（最多 1080） |
 | `--length shortest\|longest` | `longest` 把较短那段的最后一帧冻住补齐 |
-| `--divider PX` | 中缝分隔线粗细，默认 4，`0` 关闭。线是叠加绘制的，输出尺寸不变，调粗会盖住两侧画面各一半线宽 |
+| `--divider PX` | 中缝分隔线粗细，默认 4（有 `--padding` 时默认 0），`0` 关闭。线是叠加绘制的，输出尺寸不变，调粗会盖住两侧画面各一半线宽；有留白时画在两块画面中间的留白里 |
+| `--padding PX` | 两块画面四周和中间的留白，1080p 下的像素（跟 `--panel` 等比缩放），默认 0。成片会因此变大：竖版 `--padding 60` 是 2340×2040。留白放得下标签（约 57 及以上）时，标签挪到留白里、各自画面的左上方，不带底，不再压住片段自己角上的东西（比如 Story 截图的账号名和关闭按钮）；更窄时标签照旧在画面里 |
+| `--background HEX` | 画面后面的底色：留白和上方标题条，默认 `--ds-black` `#111111`，`F2EEE8` / `#F2EEE8` 都行。画在底色上的字按底色挑颜色：浅底色上，留白里的标签（没写 `--color-a` / `--color-b` 时）换成亮色主题的 `--ds-text-primary` `#111111`，标题条里的字换成亮色主题的 `--ds-text-secondary` `#0d0d0d99`。画面里的标签有自己的深色底，颜色不变 |
 | `--head SEC` | 每段只取前 SEC 秒：同时播放时成片就是前 SEC 秒；配合 `--sequential` 时每段轮到时只播前 SEC 秒 |
 | `--stats` | 量两段的技术参数，画在每块画面底部，共同的写在上方标题条里，另写 `.stats.json`，见「技术信息」 |
 | `--baseline a\|b` | 哪一段是 baseline（百分比、SSIM / PSNR 都跟它比），默认没有 |
@@ -331,6 +333,9 @@ clipcompare side a.mov b.mov --fit contain --length longest -o cmp.mp4
 # 两段都有人声（比如两版配音）：左边播完再播右边，声音不会叠在一起
 clipcompare side dub-a.mp4 dub-b.mp4 --sequential
 
+# 浅色底、四周留 60px 白，标签写在每段上方的留白里（留白时默认不画分隔线）
+clipcompare side theirs.mp4 ours.mp4 --sequential --padding 60 --background F2EEE8
+
 # 一批配音版本拼成网格，每段只听前 8 秒，轮流播
 clipcompare grid dub-*.mp4 --sequential --head 8
 
@@ -358,9 +363,9 @@ clipcompare pip a.mp4 b.mp4 --dry-run
 一条 filter_complex 一次成片（pip 会先单独渲一张遮罩）：
 
 ```
-side   [0:v] fps → scale → (tpad 冻帧) ┐
-                                        ├ hstack/vstack → drawbox 分隔线 → drawtext ×2
-       [1:v] 同上                       ┘
+side   [0:v] fps → scale → (tpad 冻帧) → (pad 留白) ┐
+                                                     ├ hstack/vstack → drawbox 分隔线 → drawtext ×2
+       [1:v] 同上                                    ┘
 
 wipe   [0:v] fps → scale ─────────────┐
                                        ├ xfade(custom expr) → drawtext ×2(按时间启停)
@@ -440,6 +445,7 @@ uv tool install --force .
 - 提示词排版忽略字距调整（kerning），一行最多偏几个像素；字号 15px 还放不下的段落会被截断，完整内容看网页。
 - `--group` 先把每组单独渲染、再不重编码地拼起来，所以每组的格数、尺寸都相同；某一组完全没有声音时拼接会出错。
 - `--stats`、`--baseline` 只在 `grid` 和 `side` 里有，recipe 只在 `grid`（要 manifest）；`wipe` / `pip` 没有。
+- `--padding` / `--background` 只有 `side` 有：`grid` 的格子间距是 `--gap`，`wipe` / `pip` 是一整块画面、没有底色可换。
 - `side` / `wipe` / `pip` 只吃两段；三段以上用 `grid`。`grid` 的片段越多，ffmpeg 同时解码的路数越多，渲染越慢。
 
 ## License

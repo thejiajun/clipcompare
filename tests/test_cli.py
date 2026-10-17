@@ -95,3 +95,24 @@ def test_grid_rejects_impossible_groups(extra, message):
     args = cli._parser().parse_args(["grid", "a.mp3", "b.mp3", "c.mp3", "d.mp3", *extra])
     with pytest.raises(SystemExit, match=message):
         cli._check_grid(args, 4)
+
+
+@pytest.mark.parametrize("value", ["F2EEE8", "#F2EEE8", "0xf2eee8"])
+def test_background_takes_any_hex_spelling(value):
+    from clipcompare.filters import hex_color
+
+    assert hex_color(value) == "0xf2eee8"
+
+
+def test_background_rejects_anything_but_six_hex_digits():
+    from clipcompare.filters import hex_color
+
+    for value in ("white", "#fff", "F2EEE8FF"):
+        with pytest.raises(ValueError):
+            hex_color(value)
+
+
+def test_side_divider_is_unset_unless_given_so_padding_can_drop_it():
+    args = cli._parser().parse_args(["side", "a.mp4", "b.mp4", "--padding", "60", "--background", "F2EEE8"])
+    assert args.divider is None and args.padding == 60 and args.background == "F2EEE8"
+    assert cli._parser().parse_args(["side", "a.mp4", "b.mp4", "--divider", "4"]).divider == 4

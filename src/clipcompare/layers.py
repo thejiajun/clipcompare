@@ -90,15 +90,17 @@ def overlay(
 
 def shared_line(
     last: str, text: str, font: Path, band: int, top: int, width: int, folder: Path, margin: int,
+    color: str = DS_TEXT_SECONDARY_DARK,
 ) -> tuple[str, str]:
     """(step, new last label) drawing `text` centred in a band `band` px tall
-    starting at `top`, cut with an ellipsis to fit `width` less `margin`s."""
+    starting at `top`, cut with an ellipsis to fit `width` less `margin`s, in
+    `color` (side passes one that reads on its --background)."""
     size = max(round(band * 0.45), 8)
     shared_file = folder / "shared.txt"
     shared_file.write_text(captions_mod.ellipsize_text(text, width - 2 * margin, size, font), encoding="utf-8")
     step = (
         f"[{last}]drawtext=textfile={escape(str(shared_file))}:fontfile={escape(str(font))}"
-        f":fontsize={size}:expansion=none:fontcolor={DS_TEXT_SECONDARY_DARK}"
+        f":fontsize={size}:expansion=none:fontcolor={color}"
         f":y_align=font:x=(w-tw)/2:y={top + (band - size) // 2}[sh]"
     )
     return step, "sh"
